@@ -95,9 +95,19 @@ async function restoreArchivedClient(requestedUpload, exact) {
     }
     await execFileAsync("unzip", ["-q", zipPath, "-d", temp], { maxBuffer: 8 * 1024 * 1024 });
     const sourceDir = join(temp, upload);
-    const archivedFlags = JSON.parse(await readFile(join(sourceDir, "client-settings", "application-WebClientApp.json"), "utf8"));
-    if (!archivedFlags.applicationSettings || typeof archivedFlags.applicationSettings !== "object") {
-      throw new Error("The archived Roblox client has no usable feature flags.");
+    let applicationSettings;
+    try {
+      const archivedFlags = JSON.parse(await readFile(join(sourceDir, "client-settings", "application-WebClientApp.json"), "utf8"));
+      applicationSettings = archivedFlags.applicationSettings;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (!applicationSettings || typeof applicationSettings !== "object") {
+      console.warn("[webblox] archive has no saved feature flags; fetching Roblox's current flags");
+      applicationSettings = (await getJson(FLAGS_URL)).applicationSettings;
+    }
+    if (!applicationSettings || typeof applicationSettings !== "object") {
+      throw new Error("No usable Roblox feature flags are available.");
     }
     await rm(OUT, { recursive: true, force: true });
     await cp(sourceDir, OUT, { recursive: true });
@@ -105,7 +115,7 @@ async function restoreArchivedClient(requestedUpload, exact) {
       upload,
       version: release.name?.split(" ")[0] ?? null,
       base: `${CDN}/${upload}-RobloxWebClient`,
-      applicationSettings: archivedFlags.applicationSettings,
+      applicationSettings,
     };
   } finally {
     await rm(temp, { recursive: true, force: true });
