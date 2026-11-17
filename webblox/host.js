@@ -17,7 +17,6 @@ const ROOT = new URL("./", import.meta.url);
 const ENGINE_BASE = new URL("engine", ROOT).href;
 const WISP_KEY = "blox.wisp";
 const JAR_KEY = "blox.cookies";
-const MANUAL_KEY = "blox.manual";
 // ?placeId=…&gameInstanceId=…: join that server of the place (roblox.com's
 // Join on a server or a friend). The id is a job id, a UUID in practice.
 const JOIN_SERVER = (() => {
@@ -27,7 +26,6 @@ const JOIN_SERVER = (() => {
   return placeId && serverId && /^[A-Za-z0-9-]{1,64}$/.test(serverId) ? { placeId, serverId } : null;
 })();
 const SESSION = ".ROBLOSECURITY";
-const SESSION_PREFIX = "_|WARNING:-DO-NOT-SHARE-THIS.";
 const SESSION_CHECK = "https://users.roblox.com/v1/users/authenticated";
 const ROBLOX_HOST = /(^|\.)(roblox\.com|rbxcdn\.com|robloxlabs\.com)$/i;
 // Dropped from what the engine sent: the browser's own values describe this
@@ -151,12 +149,10 @@ function parseSetCookie(url, line) {
   return cookie;
 }
 
-// `manual`: pasted here rather than taken from the Scramjet browser.
-function storeSession(value, manual) {
+function storeSession(value) {
   let jar = readJar().filter((c) => c.name !== SESSION);
   jar = putCookie(jar, { name: SESSION, value, domain: "roblox.com", hostOnly: false, path: "/", expires: 0 });
   writeJar(jar);
-  localStorage.setItem(MANUAL_KEY, manual ? "1" : "0");
 }
 
 function forgetSession() {
@@ -341,8 +337,8 @@ function sessionFromDump(dump) {
 }
 
 // Puts a candidate session in the jar and keeps it only if Roblox accepts it.
-async function trySession(value, manual) {
-  storeSession(value, manual);
+async function trySession(value) {
+  storeSession(value);
   if (await sessionAccepted()) return true;
   forgetSession();
   return false;
@@ -357,65 +353,52 @@ function askForSession(expired) {
     shade.innerHTML = `
       <form novalidate aria-labelledby="session-title">
         <h1 id="session-title"></h1>
-        <p>If this site has a proxy browser, sign in to roblox.com there (choose the email one-time code), then press Sign in here.</p>
-        <p>Or paste the value of your <code>.ROBLOSECURITY</code> cookie. It stays in this browser and is sent only to Roblox, encrypted end to end.</p>
-        <input name="cookie" type="password" autocomplete="off" spellcheck="false" aria-label=".ROBLOSECURITY (optional)" aria-describedby="session-error">
+        <p>Inicia sesión en Roblox con “Email a code” en la página anterior. Vuelve aquí y pulsa Reintentar para usar esa sesión automáticamente.</p>
         <p class="error" id="session-error" role="alert"></p>
         <div class="actions">
-          <button type="button" class="secondary">Back</button>
-          <button type="submit">Sign in</button>
+          <button type="button" class="secondary">Volver</button>
+          <button type="submit">Reintentar</button>
         </div>
       </form>`;
     const form = shade.querySelector("form");
-    const input = form.querySelector("input");
     const error = form.querySelector(".error");
     const [back, submit] = form.querySelectorAll("button");
-    form.querySelector("h1").textContent = expired ? "Your Roblox session expired" : "Sign in to Roblox";
+    form.querySelector("h1").textContent = expired ? "La sesión de Roblox caducó" : "Inicia sesión en Roblox";
     const fail = (text) => {
       error.textContent = text;
-      input.setAttribute("aria-invalid", "true");
-      input.focus();
+      submit.focus();
     };
-    input.addEventListener("input", () => {
-      error.textContent = "";
-      input.removeAttribute("aria-invalid");
-    });
+    submit.addEventListener("click", () => { error.textContent = ""; });
     back.addEventListener("click", () => location.assign(ROOT.href));
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const pasted = input.value.trim().replace(/^\.ROBLOSECURITY=/, "");
-      if (pasted && !pasted.startsWith(SESSION_PREFIX)) return fail("That isn't a .ROBLOSECURITY value.");
-      const value = pasted || (await proxySession());
-      if (!value) return fail("No Roblox sign-in found in this site's proxy browser. Paste your .ROBLOSECURITY instead.");
+      const value = await proxySession();
+      if (!value) return fail("No se encontró una sesión de Roblox. Inicia sesión en la página anterior y vuelve a intentarlo.");
       submit.disabled = true;
       let accepted = false;
       try {
-        accepted = await trySession(value, Boolean(pasted));
+        accepted = await trySession(value);
       } catch (err) {
         forgetSession();
         submit.disabled = false;
-        return fail(`Couldn't reach Roblox: ${err.message || err}`);
+        return fail(`No se pudo conectar con Roblox: ${err.message || err}`);
       }
       submit.disabled = false;
-      if (!accepted) return fail(pasted ? "Roblox rejected that session." : "The sign-in in this site's proxy browser has expired. Sign in there again.");
+      if (!accepted) return fail("La sesión del proxy caducó. Inicia sesión en Roblox otra vez.");
       shade.remove();
       resolve();
     });
     document.body.append(shade);
-    input.focus();
+    submit.focus();
   });
 }
 
-// Signing in on roblox.com in the Scramjet browser is the usual way in, so that
-// session wins (an account switched there follows here), unless one was
-// pasted here on purpose. The other is the fallback.
+// Signing in on roblox.com in the Scramjet browser is the only sign-in path.
 async function ensureSession() {
   const saved = savedSession();
-  const manual = localStorage.getItem(MANUAL_KEY) === "1";
   const proxied = await proxySession();
-  const order = manual ? [saved, proxied] : [proxied, saved];
-  for (const value of new Set(order.filter(Boolean))) {
-    if (await trySession(value, value === saved && manual)) return;
+  for (const value of new Set([proxied, saved].filter(Boolean))) {
+    if (await trySession(value)) return;
   }
   return askForSession(saved !== null);
 }

@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+.DS_Store
+node_modules
+vendor
+proxy/launch-plugin.mjs
+proxy/controller
+proxy/scramjet
+work
+outputs
+*.log

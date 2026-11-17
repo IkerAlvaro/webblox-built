@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: webblox-scramjet
+    runtime: docker
+    region: frankfurt
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: HOST
+        value: 0.0.0.0

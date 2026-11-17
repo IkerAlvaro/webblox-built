@@ -17,11 +17,41 @@ Needs [Bun](https://bun.sh) and Node 18+ (for the fetch script).
 ```sh
 bun install
 bun run fetch:webblox   # ~255 MB into vendor/webblox/engine/
+bun run build:proxy
 bun start               # http://127.0.0.1:8080/blox/
 ```
 
 `PORT` and `HOST` change where it listens. The page must be served over HTTPS
 (or from `localhost`) for service workers and `SharedArrayBuffer`.
+
+## Online login with Roblox
+
+The home page opens Roblox through Scramjet 2. Choose **Other sign-in options
+→ Email a code**, then open Webblox from the same site. Webblox
+reads the Scramjet session from that browser automatically, so there is no need
+to copy the `.ROBLOSECURITY` cookie. The normal Roblox login and any verification
+steps still apply.
+
+Both pages must be on the same HTTPS origin. The standalone Scramjet runtime is
+included under `proxy/`; its Wisp connection is limited to Roblox, its CDN,
+Roblox Labs, and login verification hosts. This keeps the server from becoming
+a general purpose open proxy.
+
+## Deploy on Render
+
+The included `render.yaml` and `Dockerfile` define a public Render web service
+on the free plan. Fork this repository to your GitHub account, connect that
+fork in Render, and create a Blueprint from `render.yaml`. Render supplies an
+HTTPS `onrender.com` URL and the port automatically. The Docker build downloads
+the Roblox engine and builds the Scramjet launch integration.
+
+The free service may sleep after 15 minutes without inbound traffic and can
+restart at any time. Render also applies monthly instance-hour and bandwidth
+limits; the service is intended for personal use and testing on the free plan.
+
+Scramjet is licensed under AGPL-3.0. The vendored browser files and license are
+in `proxy/` and `licenses/AGPL-3.0-Scramjet.txt`. Scramjet attribution and its
+source links are shown on the home page.
 
 Open `/blox/` for a small launcher (search, or paste a game link), or go
 straight to a game with `/blox/?placeId=<id>` (`&gameInstanceId=<job id>` for
@@ -134,22 +164,18 @@ createBloxLaunchPlugin(plugins.ManagedPlugin, {
 ```
 
 When `/blox/` shares an origin with the Scramjet 2 controller, `host.js` reads
-`.ROBLOSECURITY` from the controller's cookie jar (IndexedDB
-`__scramjet_controller` → `state` → `cookies`), so signing in to roblox.com in
-the proxy signs in the player too.
+the Roblox session from the controller's browser storage, so signing in to
+roblox.com in the proxy signs in the player too. No cookie copying is needed.
 
 ## Signing in
 
-Joining needs a `.ROBLOSECURITY` session (without one Roblox answers 524 "Not
-authorized"). Two ways:
+Joining needs an authenticated Roblox session (without one Roblox answers 524
+"Not authorized"):
 
-- **Through a Scramjet 2 proxy on the same origin:** sign in to roblox.com
-  there with "Email me a One Time Code" (password sign-in does not get
-  through the proxy). If you get a CAPTCHA, use audio mode; for 2FA, pick
-  "More options" → "Email". Then press Sign in on `/blox/`.
-- **Paste the cookie:** the sign-in prompt accepts the `.ROBLOSECURITY` value.
-  It stays in that browser's `localStorage` and is only sent to Roblox, over
-  TLS that ends in the browser.
+- **Through the Scramjet 2 proxy on the same origin:** open the home page and
+  choose "Other sign-in options" → "Email a code". If you get a CAPTCHA, use
+  audio mode; for 2FA, choose "More options" → "Email". Then open `/blox/`;
+  it picks up the session automatically.
 
 Using a modified client carries a small risk of an account warning from
 Roblox. Proceed with caution.

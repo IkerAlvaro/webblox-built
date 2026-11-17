@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Webblox · Iniciar sesión en Roblox</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #10131a;
+        color: #f3f5f8;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; }
+      .page { min-height: 100vh; display: flex; flex-direction: column; }
+      header {
+        display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+        background: #181d27; border-bottom: 1px solid #2b3341;
+      }
+      .brand { color: #fff; font-size: 18px; font-weight: 750; text-decoration: none; white-space: nowrap; }
+      .address { min-width: 120px; flex: 1; display: flex; gap: 8px; }
+      input {
+        min-width: 0; flex: 1; border: 1px solid #3a4558; border-radius: 8px;
+        background: #10131a; color: #fff; padding: 10px 12px; font: inherit;
+      }
+      button, .play {
+        display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+        border: 0; border-radius: 8px; padding: 10px 14px; color: white;
+        font: inherit; font-weight: 650; cursor: pointer; text-decoration: none; white-space: nowrap;
+      }
+      button { background: #343d4d; }
+      button:hover { background: #434f63; }
+      .play { background: #e73b42; }
+      .play:hover { background: #f04c52; }
+      .hint {
+        padding: 10px 18px; background: #202838; color: #d8e0ee;
+        font-size: 13px; line-height: 1.45;
+      }
+      .hint strong { color: #fff; }
+      .status { padding: 7px 18px; color: #adb8c8; font-size: 12px; min-height: 30px; }
+      iframe { display: block; flex: 1; width: 100%; min-height: 420px; border: 0; background: white; }
+      footer { padding: 8px 18px; color: #929eaf; font-size: 11px; }
+      footer a { color: #c6d4ea; }
+      @media (max-width: 700px) {
+        header { flex-wrap: wrap; }
+        .brand { margin-right: auto; }
+        .address { order: 3; flex-basis: 100%; }
+        .hint { font-size: 12px; }
+        .play { padding-inline: 10px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <a class="brand" href="/">Webblox</a>
+        <form class="address" id="addressForm">
+          <input id="urlInput" type="url" aria-label="Dirección de Roblox" value="https://www.roblox.com/login" />
+          <button type="submit">Abrir Roblox</button>
+        </form>
+        <a class="play" href="/blox/" target="_blank" rel="noopener">Abrir Webblox ↗</a>
+      </header>
+      <div class="hint">
+        <strong>Inicio normal:</strong> en Roblox, elige <em>Other sign-in options → Email a code</em>.
+        Para la verificación en dos pasos, elige <em>More options → Email</em>.
+        Después abre Webblox; tomará esta sesión automáticamente. No hace falta copiar cookies.
+      </div>
+      <div class="status" id="status" role="status" aria-live="polite">Preparando Roblox…</div>
+      <iframe id="browserFrame" title="Roblox" allow="autoplay; fullscreen; gamepad; clipboard-read; clipboard-write" allowfullscreen></iframe>
+      <footer>
+        Scramjet 2 · <a href="https://github.com/MercuryWorkshop/scramjet">Código fuente</a> ·
+        AGPL-3.0 · Plantilla de <a href="https://github.com/x8rr/scramjet-templates">x8rr</a> ·
+        <a href="/licenses/AGPL-3.0-Scramjet.txt">Licencia</a>
+      </footer>
+    </div>
+
+    <script src="/scramjet/scramjet.js"></script>
+    <script src="/controller/controller.api.js"></script>
+    <script src="/epoxy/index.js"></script>
+    <script type="module">
+      import { bloxUrl, createBloxLaunchPlugin } from "/launch-plugin.mjs";
+
+      const { Controller, ManagedPlugin } = window.$scramjetController;
+      const { defaultConfig } = window.$scramjet;
+      const EpoxyTransport = window.EpoxyTransport.default;
+      const iframe = document.getElementById("browserFrame");
+      const input = document.getElementById("urlInput");
+      const status = document.getElementById("status");
+      const wisp = new URL("/wisp/", location.href);
+      wisp.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      let frame;
+
+      function setStatus(message, error = false) {
+        status.textContent = message;
+        status.style.color = error ? "#ff8287" : "#adb8c8";
+      }
+
+      function robloxUrl(value) {
+        const raw = value.trim();
+        const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+        if (!/(^|\.)roblox\.com$/i.test(url.hostname) && !/(^|\.)(rbxcdn\.com|robloxlabs\.com)$/i.test(url.hostname)) {
+          throw new Error("Por seguridad, este proxy solo abre páginas de Roblox.");
+        }
+        if (url.protocol !== "https:") throw new Error("Usa una dirección HTTPS de Roblox.");
+        return url.href;
+      }
+
+      document.getElementById("addressForm").addEventListener("submit", (event) => {
+        event.preventDefault();
+        try {
+          const url = robloxUrl(input.value);
+          input.value = url;
+          frame?.go(url);
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      });
+
+      async function start() {
+        try {
+          await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+          const registration = await navigator.serviceWorker.ready;
+          const serviceworker = navigator.serviceWorker.controller ?? registration.active;
+          if (!serviceworker) throw new Error("No se pudo iniciar el service worker.");
+
+          const transport = new EpoxyTransport({ wisp: wisp.href });
+          await transport.init();
+
+          const controller = new Controller({ serviceworker, transport, scramjetConfig: defaultConfig });
+          await controller.wait();
+
+          const launchPlugin = createBloxLaunchPlugin(ManagedPlugin, {
+            url: (launch) => bloxUrl("/blox/", launch, wisp.href),
+            notify: setStatus,
+          });
+          frame = controller.createFrame(iframe, { plugins: [launchPlugin] });
+          frame.go("https://www.roblox.com/login");
+          setStatus("Roblox está listo. Inicia sesión con un código enviado por correo.");
+        } catch (error) {
+          console.error(error);
+          setStatus(`No se pudo iniciar Roblox: ${error.message || error}`, true);
+        }
+      }
+
+      if ("serviceWorker" in navigator) void start();
+      else setStatus("Este navegador no admite el proxy necesario para iniciar sesión.", true);
+    </script>
+  </body>
+</html>

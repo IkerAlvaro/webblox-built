@@ -6,11 +6,14 @@
   "scripts": {
     "start": "bun server.ts",
     "fetch:webblox": "node scripts/fetch-webblox.mjs",
+    "build:proxy": "bun build integrations/scramjet/plugin.ts --target browser --format esm --outfile proxy/launch-plugin.mjs && bun run scripts/copy-scramjet-assets.mjs",
     "test": "bun test",
     "typecheck": "tsc"
   },
   "dependencies": {
     "@mercuryworkshop/epoxy-transport": "3.0.1",
+    "@mercuryworkshop/scramjet": "2.0.67-alpha.2",
+    "@mercuryworkshop/scramjet-controller": "0.0.14",
     "@mercuryworkshop/wisp-js": "0.5.3"
   },
   "devDependencies": {
