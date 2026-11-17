@@ -11,9 +11,13 @@
 // gets a gzip copy beside it, which the server sends to browsers that accept it.
 
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createGzip } from "node:zlib";
 
@@ -25,6 +29,8 @@ const BINARY_TYPE = "WebClientApp";
 const CLIENT_VERSION_URL = `https://clientsettings.roblox.com/v2/client-version/${BINARY_TYPE}`;
 const FLAGS_URL = `https://clientsettingscdn.roblox.com/v2/settings/application/${BINARY_TYPE}`;
 const CDN = "https://setup.rbxcdn.com/webclient";
+const ARCHIVE_API = "https://api.github.com/repos/setup-rbxcdn/webclient-archive/releases?per_page=20";
+const execFileAsync = promisify(execFile);
 // Loaded by WasmPlayer.js by name; everything else comes from the metadata list.
 const CORE = ["WasmPlayer.js", "WebClient.js", "WebClient.wasm", "WebClient.metadata.json", "audio-processor-fast.js"];
 const CONCURRENCY = 16;
@@ -36,6 +42,74 @@ async function getJson(url) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return res.json();
+}
+
+async function getArchiveRelease(requestedUpload, exact) {
+  const response = await fetch(ARCHIVE_API, {
+    headers: { accept: "application/vnd.github+json", "user-agent": "webblox-built" },
+  });
+  if (!response.ok) throw new Error(`Roblox build archive: HTTP ${response.status}`);
+  const releases = await response.json();
+  const complete = releases.filter(release =>
+    /^webclient-version-[0-9a-f]{16}$/.test(release.tag_name ?? "") &&
+    release.author?.login === "github-actions[bot]" &&
+    /Archive status:\s*\*\*complete\*\*/i.test(release.body ?? "") &&
+    release.assets?.some(asset => asset.name?.endsWith(".zip") && /^sha256:[0-9a-f]{64}$/.test(asset.digest ?? "")),
+  );
+  const requested = requestedUpload && complete.find(release => release.tag_name === `webclient-${requestedUpload}`);
+  if (exact && !requested) throw new Error(`Roblox client ${requestedUpload} is not in the public archive.`);
+  const release = requested ?? complete[0];
+  if (!release) throw new Error("No complete archived Roblox browser client is available.");
+  return release;
+}
+
+async function restoreArchivedClient(requestedUpload, exact) {
+  const release = await getArchiveRelease(requestedUpload, exact);
+  const asset = release.assets.find(item => item.name?.endsWith(".zip"));
+  const match = /^webclient-version-([0-9a-f]{16})$/.exec(release.tag_name);
+  if (!asset || !match) throw new Error("The archived Roblox browser client has an invalid release format.");
+  const upload = `version-${match[1]}`;
+  const assetUrl = new URL(asset.browser_download_url);
+  if (assetUrl.origin !== "https://github.com" || !assetUrl.pathname.startsWith("/setup-rbxcdn/webclient-archive/releases/download/")) {
+    throw new Error("The archived Roblox client download is not from the expected GitHub release.");
+  }
+  const temp = await mkdtemp(join(ROOT, ".webclient-archive-"));
+  const zipPath = join(temp, asset.name);
+  try {
+    const response = await fetch(assetUrl);
+    if (!response.ok || !response.body) throw new Error(`Roblox client archive download: HTTP ${response.status}`);
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(zipPath));
+
+    const hash = createHash("sha256");
+    for await (const chunk of createReadStream(zipPath)) hash.update(chunk);
+    const actualDigest = `sha256:${hash.digest("hex")}`;
+    if (actualDigest !== asset.digest || (await sizeOnDisk(zipPath)) !== asset.size) {
+      throw new Error("The archived Roblox client failed GitHub's published SHA-256 or size check.");
+    }
+
+    const { stdout } = await execFileAsync("unzip", ["-Z1", zipPath], { maxBuffer: 8 * 1024 * 1024 });
+    const names = stdout.trim().split("\n").filter(Boolean);
+    const prefix = `${upload}/`;
+    if (!names.length || names.some(name => name.startsWith("/") || !name.startsWith(prefix) || name.split("/").includes(".."))) {
+      throw new Error("The Roblox client archive contains an unexpected path.");
+    }
+    await execFileAsync("unzip", ["-q", zipPath, "-d", temp], { maxBuffer: 8 * 1024 * 1024 });
+    const sourceDir = join(temp, upload);
+    const archivedFlags = JSON.parse(await readFile(join(sourceDir, "client-settings", "application-WebClientApp.json"), "utf8"));
+    if (!archivedFlags.applicationSettings || typeof archivedFlags.applicationSettings !== "object") {
+      throw new Error("The archived Roblox client has no usable feature flags.");
+    }
+    await rm(OUT, { recursive: true, force: true });
+    await cp(sourceDir, OUT, { recursive: true });
+    return {
+      upload,
+      version: release.name?.split(" ")[0] ?? null,
+      base: `${CDN}/${upload}-RobloxWebClient`,
+      applicationSettings: archivedFlags.applicationSettings,
+    };
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
 }
 
 async function sizeOnDisk(path) {
@@ -98,9 +172,11 @@ async function main() {
     process.exit(1);
   }
   const live = pinned ? null : await getJson(CLIENT_VERSION_URL);
-  const upload = pinned ?? live.clientVersionUpload;
+  let upload = pinned ?? live.clientVersionUpload;
   if (!VERSION_RE.test(upload ?? "")) throw new Error(`unexpected client-version response: ${JSON.stringify(live)}`);
-  const base = `${CDN}/${upload}-RobloxWebClient`;
+  let base = `${CDN}/${upload}-RobloxWebClient`;
+  let engineVersion = live?.version ?? null;
+  let applicationSettings;
   console.log(`[webblox] engine ${upload}${live ? ` (${live.version})` : " (pinned)"}`);
   console.log(`[webblox] from ${base}`);
 
@@ -116,13 +192,49 @@ async function main() {
     await rm(OUT, { recursive: true, force: true });
   }
   await mkdir(OUT, { recursive: true });
-  const record = { clientVersionUpload: upload, version: live?.version ?? null, source: base, complete: false };
+  let record = { clientVersionUpload: upload, version: engineVersion, source: base, complete: false };
   await writeFile(VERSION_FILE, `${JSON.stringify(record, null, 2)}\n`);
 
-  for (const name of CORE) {
-    const fetched = await download(`${base}/${name}`, join(OUT, name));
-    console.log(`[webblox] ${fetched ? "fetched" : "kept"} ${name}`);
+  let usedArchive = false;
+  try {
+    for (const name of CORE) {
+      const fetched = await download(`${base}/${name}`, join(OUT, name));
+      console.log(`[webblox] ${fetched ? "fetched" : "kept"} ${name}`);
+    }
+
+    const metadata = JSON.parse(await readFile(join(OUT, "WebClient.metadata.json"), "utf8"));
+    if (!Array.isArray(metadata)) throw new Error("WebClient.metadata.json is not a file list");
+    const files = metadata.filter(entry => {
+      const ok = typeof entry?.path === "string" && entry.path.startsWith("/") && !entry.path.split("/").includes("..");
+      if (!ok) console.warn(`[webblox] skipping bad metadata entry ${JSON.stringify(entry)}`);
+      return ok;
+    });
+    const total = files.reduce((sum, entry) => sum + entry.size, 0);
+    console.log(`[webblox] ${files.length} content files, ${(total / 1e6).toFixed(1)} MB`);
+    const failures = await pool(files, entry =>
+      download(`${base}${encodeURI(entry.path)}`, join(OUT, entry.path), entry.size));
+    if (failures.length) {
+      for (const message of failures) console.error(`[webblox] failed ${message}`);
+      throw new Error(`${failures.length} Roblox client files could not be downloaded: ${failures.slice(0, 5).join("; ")}`);
+    }
+
+    const flags = await getJson(FLAGS_URL);
+    applicationSettings = flags.applicationSettings;
+    if (!applicationSettings || typeof applicationSettings !== "object") throw new Error("Roblox returned no application settings");
+  } catch (error) {
+    if (!/HTTP (403|404)/.test(error.message ?? "")) throw error;
+    console.warn(`[webblox] Roblox CDN denied a client file (${error.message}); using the latest complete public archive`);
+    const archived = await restoreArchivedClient(pinned ? upload : null, Boolean(pinned));
+    upload = archived.upload;
+    base = archived.base;
+    engineVersion = archived.version;
+    applicationSettings = archived.applicationSettings;
+    usedArchive = true;
+    record = { clientVersionUpload: upload, version: engineVersion, source: base, complete: false, archived: true };
+    await writeFile(VERSION_FILE, `${JSON.stringify(record, null, 2)}\n`);
+    console.log(`[webblox] restored complete archived client ${upload} (${engineVersion ?? "version unknown"})`);
   }
+
   for (const name of GZIP) {
     const path = join(OUT, name);
     if ((await sizeOnDisk(`${path}.gz`)) >= 0) continue;
@@ -139,22 +251,21 @@ async function main() {
     if (!ok) console.warn(`[webblox] skipping bad metadata entry ${JSON.stringify(entry)}`);
     return ok;
   });
-  const total = files.reduce((sum, entry) => sum + entry.size, 0);
-  console.log(`[webblox] ${files.length} content files, ${(total / 1e6).toFixed(1)} MB`);
-  const failures = await pool(files, entry =>
-    download(`${base}${encodeURI(entry.path)}`, join(OUT, entry.path), entry.size));
-  if (failures.length) {
-    for (const message of failures) console.error(`[webblox] failed ${message}`);
-    process.exit(1);
+  if (usedArchive) {
+    const missing = [];
+    for (const entry of files) {
+      const actual = await sizeOnDisk(join(OUT, entry.path));
+      if (actual !== entry.size) missing.push(`${entry.path} (${actual}/${entry.size})`);
+    }
+    if (missing.length) throw new Error(`archived Roblox client is incomplete: ${missing.slice(0, 10).join(", ")}`);
   }
 
   // Same shape the player page reads: flags pinned to the engine they came from,
   // so a later Roblox flag push cannot break this build.
-  const flags = await getJson(FLAGS_URL);
   const pinnedAt = new Date().toISOString();
   await writeFile(join(OUT, "PinnedFlags.json"),
-    JSON.stringify({ engine: upload, pinnedAt, applicationSettings: flags.applicationSettings }));
-  console.log(`[webblox] pinned ${Object.keys(flags.applicationSettings).length} flags`);
+    JSON.stringify({ engine: upload, pinnedAt, applicationSettings }));
+  console.log(`[webblox] pinned ${Object.keys(applicationSettings).length} flags`);
 
   await writeFile(VERSION_FILE, `${JSON.stringify({ ...record, complete: true, fetchedAt: pinnedAt }, null, 2)}\n`);
   console.log(`[webblox] done: ${OUT}`);

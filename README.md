@@ -115,6 +115,9 @@ It resolves the version from
 files the metadata lists, gzips `WebClient.wasm`, and pins the live flags.
 Files already on disk with the right size are skipped, so an interrupted run
 resumes. A new version replaces the old one. Rerun it to update.
+If Roblox returns 403/404 for a client file, deployment restores the latest
+complete snapshot from [setup-rbxcdn's WebClient archive](https://github.com/setup-rbxcdn/webclient-archive/releases).
+That snapshot can be older than the live client until the archive catches up.
 
 ## Embedding in your own server
 
