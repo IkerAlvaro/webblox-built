@@ -603,6 +603,27 @@ async function warnOldChrome() {
   document.body.append(note);
 }
 
+// ---- Join errors ------------------------------------------------------------
+
+// The engine reaches game servers itself, over WebTransport to
+// *.qdmux.roblox.com, not through the Wisp server. A network that blocks
+// those (school or work Wi-Fi often does) fails the join with "Failed to
+// launch the game", which says nothing about why; add the likely cause.
+function explainJoinErrors() {
+  const message = document.getElementById("loading-error-message");
+  if (!message) return;
+  const note = document.createElement("p");
+  note.className = "loading-error-hint";
+  note.textContent =
+    "Si estás en una red con restricciones (colegio, trabajo o una wifi pública), probablemente bloquea la conexión con los servidores de juego de Roblox. Prueba desde otra red, por ejemplo la de casa o los datos del móvil.";
+  const update = () => {
+    const failed = /failed to launch|launch the game|could not connect|unable to connect/i.test(message.textContent ?? "");
+    if (failed && !note.isConnected) message.after(note);
+    else if (!failed && note.isConnected) note.remove();
+  };
+  new MutationObserver(update).observe(message, { childList: true, characterData: true, subtree: true });
+}
+
 // ---- Boot ---------------------------------------------------------------------
 
 async function controlled() {
@@ -632,6 +653,7 @@ async function boot() {
   if (!window.crossOriginIsolated) {
     throw new Error("Esta página no está aislada entre orígenes (cross-origin isolated), así que el motor no puede usar memoria compartida.");
   }
+  explainJoinErrors();
   void warnOldChrome();
   say("Conectando…");
   await controlled();
