@@ -23,7 +23,7 @@ writeFileSync(join(engine, "WebClient.js"), script);
 writeFileSync(join(engine, "WebClient.js.gz"), gzipSync(script));
 writeFileSync(join(engine, "WebClient.js.br"), brotliCompressSync(script));
 const source = "https://setup.rbxcdn.com/webclient/version-0123456789abcdef-RobloxWebClient";
-writeFileSync(join(engine, "version.json"), JSON.stringify({ source }));
+writeFileSync(join(engine, "version.json"), JSON.stringify({ source, clientVersionUpload: "version-0123456789abcdef" }));
 
 const fetched: string[] = [];
 const fakeCdn = (async (input: string | URL | Request) => {
@@ -67,6 +67,22 @@ describe("/blox/", () => {
     const gz = await get("/blox/engine/WebClient.js", { "accept-encoding": "gzip" });
     expect(gz.headers.get("content-encoding")).toBe("gzip");
     expect((await get("/blox/engine/WebClient.js", { "accept-encoding": "br;q=0, gzip" })).headers.get("content-encoding")).toBe("gzip");
+  });
+
+  test("serves the engine under its version forever, with its size for the cache check", async () => {
+    const versioned = await get("/blox/engine/v/version-0123456789abcdef/content/a.png");
+    expect(versioned.status).toBe(200);
+    expect(versioned.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect(versioned.headers.get("x-blox-size")).toBe("3");
+    expect(versioned.headers.get("cross-origin-embedder-policy")).toBe("require-corp");
+    expect(await versioned.text()).toBe("png");
+    const compressed = await get("/blox/engine/v/version-0123456789abcdef/WebClient.wasm", { "accept-encoding": "br, gzip" });
+    expect(compressed.headers.get("x-blox-size")).toBe(String(wasm.length));
+  });
+
+  test("refuses another version, so a stale page never mixes engine files", async () => {
+    expect((await get("/blox/engine/v/version-ffffffffffffffff/content/a.png")).status).toBe(404);
+    expect((await get("/blox/engine/v/version-0123456789abcdef/../secret.txt")).status).toBe(404);
   });
 
   test("never serves files outside the host page and engine", async () => {

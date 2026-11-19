@@ -20,9 +20,67 @@ self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim(
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
-  if (!/^https?:/.test(request.url) || new URL(request.url).origin === self.location.origin) return;
+  if (!/^https?:/.test(request.url)) return;
+  const url = new URL(request.url);
+  if (url.origin === self.location.origin) {
+    const version = request.method === "GET" ? ENGINE_VERSIONED.exec(url.pathname) : null;
+    if (version) event.respondWith(cachedEngineFile(request, version[1]));
+    return;
+  }
   event.respondWith(crossOrigin(request, event.clientId));
 });
+
+// ---- Engine cache ---------------------------------------------------------------
+// engine/v/<upload>/… never changes, so it is kept in Cache Storage, one cache
+// per engine version. Every copy is checked against the size the server sent
+// (x-blox-size) when stored and when used; a short or missing copy is dropped
+// and fetched again, and caches of other versions are deleted.
+
+const ENGINE_VERSIONED = new RegExp(`^${SCOPE.pathname.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}engine/v/(version-[0-9a-f]{16})/`);
+const CACHE_PREFIX = "blox-engine-";
+const pruned = new Set();
+
+async function intact(response) {
+  if (!response?.ok) return false;
+  const expected = Number(response.headers.get("x-blox-size"));
+  if (!Number.isFinite(expected) || expected <= 0) return true;
+  try {
+    return (await response.clone().blob()).size === expected;
+  } catch {
+    return false;
+  }
+}
+
+async function pruneOtherVersions(keep) {
+  if (pruned.has(keep)) return;
+  pruned.add(keep);
+  for (const name of await caches.keys()) {
+    if (name.startsWith(CACHE_PREFIX) && name !== keep) await caches.delete(name);
+  }
+}
+
+async function cachedEngineFile(request, upload) {
+  const name = `${CACHE_PREFIX}${upload}`;
+  let cache = null;
+  try {
+    cache = await caches.open(name);
+    void pruneOtherVersions(name);
+    const hit = await cache.match(request.url);
+    if (hit && (await intact(hit))) return hit;
+    if (hit) {
+      console.warn("[blox] cached engine file damaged, fetching it again:", request.url);
+      await cache.delete(request.url);
+    }
+  } catch (error) {
+    console.warn("[blox] engine cache unavailable:", error);
+  }
+  const response = await fetch(request.url, { credentials: "same-origin", cache: "no-cache" });
+  if (cache && (await intact(response))) {
+    // Stored in the background: the engine gets its bytes now.
+    cache.put(request.url, response.clone()).catch((error) => console.warn("[blox] could not cache", request.url, error));
+  }
+  return response;
+}
 
 async function crossOrigin(request, clientId) {
   if (request.method === "GET" && FLAGS_URL.test(request.url)) {

@@ -14,7 +14,19 @@
 // roblox.com's Play button opens this page (integrations/scramjet/plugin.ts).
 
 const ROOT = new URL("./", import.meta.url);
-const ENGINE_BASE = new URL("engine", ROOT).href;
+const ENGINE_ROOT = new URL("engine", ROOT).href;
+
+// engine/v/<upload>: the server caches that path for good and sw.js keeps a
+// checked copy, so a returning player loads the engine without the network.
+// Falls back to the unversioned path when version.json is unreadable.
+async function engineBase() {
+  try {
+    const response = await fetch(`${ENGINE_ROOT}/version.json`, { cache: "no-store" });
+    const upload = response.ok ? (await response.json()).clientVersionUpload : null;
+    if (typeof upload === "string" && /^version-[0-9a-f]{16}$/.test(upload)) return `${ENGINE_ROOT}/v/${upload}`;
+  } catch {}
+  return ENGINE_ROOT;
+}
 const WISP_KEY = "blox.wisp";
 const JAR_KEY = "blox.cookies";
 // ?placeId=…&gameInstanceId=…: join that server of the place (roblox.com's
@@ -668,8 +680,9 @@ async function boot() {
   // What Roblox's WasmLoader.js leaves behind for WasmPlayer.js. channel null
   // keeps the engine on the production flags and channel.
   await avoidWebGpuOnOldChrome();
-  window.__wasmLoaderContext = { engineBase: ENGINE_BASE, channel: null, server: "prod" };
-  await loadScript(`${ENGINE_BASE}/WasmPlayer.js`);
+  const base = await engineBase();
+  window.__wasmLoaderContext = { engineBase: base, channel: null, server: "prod" };
+  await loadScript(`${base}/WasmPlayer.js`);
 }
 
 boot().catch((error) => {
