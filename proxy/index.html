@@ -3,78 +3,113 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark light" />
-    <title>Webblox · Iniciar sesión en Roblox</title>
+    <meta name="color-scheme" content="dark" />
+    <title>Webblox</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&display=swap" rel="stylesheet" />
     <style>
       :root {
+        --graphite: #171b26;
+        --panel: #20263a;
+        --line: #323a52;
+        --ink: #eef1f7;
+        --muted: #9aa3b8;
+        --cobalt: #3d7bff;
+        --cobalt-hi: #5b90ff;
+        --ok: #3ccb8b;
+        --bad: #ff7a80;
         color-scheme: dark;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #10131a;
-        color: #f3f5f8;
+        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: var(--graphite);
+        color: var(--ink);
       }
       * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; }
-      .page { min-height: 100vh; display: flex; flex-direction: column; }
-      header {
-        display: flex; align-items: center; gap: 12px; padding: 12px 18px;
-        background: #181d27; border-bottom: 1px solid #2b3341;
+      body { margin: 0; height: 100dvh; display: grid; grid-template-rows: auto auto 1fr auto; }
+      a { color: inherit; }
+      :focus-visible { outline: 2px solid var(--cobalt-hi); outline-offset: 2px; }
+
+      .bar {
+        display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px;
+        padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
       }
-      .brand { color: #fff; font-size: 18px; font-weight: 750; text-decoration: none; white-space: nowrap; }
-      .address { min-width: 120px; flex: 1; display: flex; gap: 8px; }
-      input {
-        min-width: 0; flex: 1; border: 1px solid #3a4558; border-radius: 8px;
-        background: #10131a; color: #fff; padding: 10px 12px; font: inherit;
+      .brand {
+        font: 800 22px/1 "Bricolage Grotesque", system-ui, sans-serif; letter-spacing: -0.02em;
+        text-decoration: none; display: flex; align-items: center; gap: 8px;
       }
-      button, .play {
-        display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-        border: 0; border-radius: 8px; padding: 10px 14px; color: white;
-        font: inherit; font-weight: 650; cursor: pointer; text-decoration: none; white-space: nowrap;
+      .brand svg { width: 24px; height: 24px; }
+      .address { display: flex; gap: 6px; min-width: 0; }
+      .nav {
+        width: 38px; flex: none; border: 0; border-radius: 10px; background: transparent; color: var(--muted);
+        font-size: 18px; cursor: pointer;
       }
-      button { background: #343d4d; }
-      button:hover { background: #434f63; }
-      .play { background: #e73b42; }
-      .play:hover { background: #f04c52; }
-      .hint {
-        padding: 10px 18px; background: #202838; color: #d8e0ee;
-        font-size: 13px; line-height: 1.45;
+      .nav:hover { background: var(--line); color: var(--ink); }
+      .url {
+        flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+        padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--graphite);
       }
-      .hint strong { color: #fff; }
-      .status { padding: 7px 18px; color: #adb8c8; font-size: 12px; min-height: 30px; }
-      iframe { display: block; flex: 1; width: 100%; min-height: 420px; border: 0; background: white; }
-      footer { padding: 8px 18px; color: #929eaf; font-size: 11px; }
-      footer a { color: #c6d4ea; }
-      @media (max-width: 700px) {
-        header { flex-wrap: wrap; }
-        .brand { margin-right: auto; }
-        .address { order: 3; flex-basis: 100%; }
-        .hint { font-size: 12px; }
-        .play { padding-inline: 10px; }
+      .url:focus-within { border-color: var(--cobalt); }
+      .url svg { width: 14px; height: 14px; flex: none; color: var(--ok); }
+      .url input { flex: 1; min-width: 0; height: 38px; border: 0; background: none; color: var(--ink); font: inherit; outline: none; }
+      .play {
+        display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 10px;
+        background: var(--cobalt); color: #fff; font-weight: 650; text-decoration: none; white-space: nowrap;
+      }
+      .play:hover { background: var(--cobalt-hi); }
+
+      .guide { display: flex; align-items: center; gap: 18px; padding: 8px 16px; border-bottom: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+      .guide ol { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0; padding: 0; list-style: none; counter-reset: step; flex: 1; }
+      .guide li { counter-increment: step; display: flex; align-items: center; gap: 8px; }
+      .guide li::before {
+        content: counter(step); display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+        background: var(--line); color: var(--ink); font-size: 11px; font-weight: 700;
+      }
+      .guide b { color: var(--ink); font-weight: 600; }
+      .status { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+      .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+      .status[data-state="ok"]::before { background: var(--ok); }
+      .status[data-state="error"] { color: var(--bad); }
+      .status[data-state="error"]::before { background: var(--bad); }
+
+      iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+      footer { padding: 6px 16px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); }
+
+      @media (max-width: 760px) {
+        .bar { grid-template-columns: 1fr auto; }
+        .address { grid-column: 1 / -1; grid-row: 2; }
+        .guide { flex-direction: column; align-items: flex-start; gap: 6px; }
       }
     </style>
   </head>
   <body>
-    <div class="page">
-      <header>
-        <a class="brand" href="/">Webblox</a>
-        <form class="address" id="addressForm">
-          <input id="urlInput" type="url" aria-label="Dirección de Roblox" value="https://www.roblox.com/login" />
-          <button type="submit">Abrir Roblox</button>
-        </form>
-        <a class="play" href="/blox/" target="_blank" rel="noopener">Abrir Webblox ↗</a>
-      </header>
-      <div class="hint">
-        <strong>Inicio normal:</strong> en Roblox, elige <em>Other sign-in options → Email a code</em>.
-        Para la verificación en dos pasos, elige <em>More options → Email</em>.
-        Después abre Webblox; tomará esta sesión automáticamente. No hace falta copiar cookies.
-      </div>
-      <div class="status" id="status" role="status" aria-live="polite">Preparando Roblox…</div>
-      <iframe id="browserFrame" title="Roblox" allow="autoplay; fullscreen; gamepad; clipboard-read; clipboard-write" allowfullscreen></iframe>
-      <footer>
-        Scramjet 2 · <a href="https://github.com/MercuryWorkshop/scramjet">Código fuente</a> ·
-        AGPL-3.0 · Plantilla de <a href="https://github.com/x8rr/scramjet-templates">x8rr</a> ·
-        <a href="/licenses/AGPL-3.0-Scramjet.txt">Licencia</a>
-      </footer>
+    <header class="bar">
+      <a class="brand" href="/" aria-label="Webblox, inicio">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4" transform="rotate(12 12 12)" fill="#3d7bff"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" transform="rotate(12 12 12)" fill="#171b26"/></svg>
+        Webblox
+      </a>
+      <form class="address" id="addressForm">
+        <button class="nav" type="button" id="homeButton" title="Inicio de Roblox" aria-label="Inicio de Roblox">⌂</button>
+        <button class="nav" type="button" id="reloadButton" title="Recargar" aria-label="Recargar">↻</button>
+        <label class="url">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M4 7V5a4 4 0 1 1 8 0v2h1v8H3V7h1Zm2 0h4V5a2 2 0 1 0-4 0v2Z"/></svg>
+          <input id="urlInput" type="text" inputmode="url" spellcheck="false" aria-label="Dirección de Roblox" value="https://www.roblox.com/login" />
+        </label>
+      </form>
+      <a class="play" href="/blox/" target="_blank" rel="noopener">Jugar en Webblox</a>
+    </header>
+    <div class="guide">
+      <ol aria-label="Cómo empezar">
+        <li><span>Inicia sesión con <b>Other sign-in options → Email a code</b></span></li>
+        <li><span>Si pide verificación, elige <b>More options → Email</b></span></li>
+        <li><span>Pulsa <b>Jugar en Webblox</b>: usa esta sesión sola</span></li>
+      </ol>
+      <span class="status" id="status" role="status" aria-live="polite">Preparando Roblox…</span>
     </div>
+    <iframe id="browserFrame" title="Roblox" allow="autoplay; fullscreen; gamepad; clipboard-read; clipboard-write"></iframe>
+    <footer>
+      Funciona con Scramjet 2 (<a href="https://github.com/MercuryWorkshop/scramjet">código fuente</a>, licencia
+      <a href="/licenses/AGPL-3.0-Scramjet.txt">AGPL-3.0</a>). Plantilla de <a href="https://github.com/x8rr/scramjet-templates">x8rr</a>.
+    </footer>
 
     <script src="/scramjet/scramjet.js"></script>
     <script src="/controller/controller.api.js"></script>
@@ -94,7 +129,7 @@
 
       function setStatus(message, error = false) {
         status.textContent = message;
-        status.style.color = error ? "#ff8287" : "#adb8c8";
+        status.dataset.state = error ? "error" : "ok";
       }
 
       function robloxUrl(value) {
@@ -107,6 +142,8 @@
         return url.href;
       }
 
+      document.getElementById("homeButton").addEventListener("click", () => frame?.go("https://www.roblox.com/home"));
+      document.getElementById("reloadButton").addEventListener("click", () => frame?.go(input.value));
       document.getElementById("addressForm").addEventListener("submit", (event) => {
         event.preventDefault();
         try {
@@ -137,7 +174,7 @@
           });
           frame = controller.createFrame(iframe, { plugins: [launchPlugin] });
           frame.go("https://www.roblox.com/login");
-          setStatus("Abriendo Roblox… Inicia sesión con un código enviado por correo.");
+          setStatus("Proxy listo");
         } catch (error) {
           console.error(error);
           setStatus(`No se pudo iniciar Roblox: ${error.message || error}`, true);

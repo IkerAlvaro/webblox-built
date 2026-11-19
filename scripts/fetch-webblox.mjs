@@ -117,10 +117,17 @@ async function restoreRelease(release) {
     if (!names.length || names.some(name => name.startsWith("/") || !name.startsWith(prefix) || name.split("/").includes(".."))) {
       throw new Error("archive contains an unexpected path");
     }
-    const missingCore = ARCHIVE_REQUIRED.filter(name => !names.includes(`${prefix}${name}`));
-    if (missingCore.length) throw new Error(`archive lacks ${missingCore.join(", ")}`);
+    // The engine folder is wherever the archive keeps its file list: the
+    // upload folder itself, or a subfolder in newer archive layouts.
+    const metadataName = names.find(name => name.endsWith("/WebClient.metadata.json"));
+    const engineDir = metadataName ? metadataName.slice(0, -"WebClient.metadata.json".length) : prefix;
+    const missingCore = ARCHIVE_REQUIRED.filter(name => !names.includes(`${engineDir}${name}`));
+    if (missingCore.length) {
+      const sample = names.filter(name => /metadata|WebClient\./i.test(name)).slice(0, 8).join(", ") || names.slice(0, 8).join(", ");
+      throw new Error(`archive lacks ${missingCore.join(", ")} (has: ${sample})`);
+    }
     await execFileAsync("unzip", ["-q", zipPath, "-d", temp], { maxBuffer: 8 * 1024 * 1024 });
-    const sourceDir = join(temp, upload);
+    const sourceDir = join(temp, engineDir);
 
     const files = await readMetadata(sourceDir);
     const missing = [];
@@ -132,7 +139,7 @@ async function restoreRelease(release) {
 
     let applicationSettings;
     try {
-      const archivedFlags = JSON.parse(await readFile(join(sourceDir, "client-settings", "application-WebClientApp.json"), "utf8"));
+      const archivedFlags = JSON.parse(await readFile(join(temp, upload, "client-settings", "application-WebClientApp.json"), "utf8"));
       applicationSettings = archivedFlags.applicationSettings;
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
