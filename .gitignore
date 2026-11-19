@@ -1,11 +1,9 @@
 node_modules/
 # Roblox WebClientApp engine (~255 MB, Roblox's): bun run fetch:webblox
 vendor/
-proxy/launch-plugin.mjs
-proxy/scramjet/scramjet.js
-proxy/scramjet/scramjet.wasm
-proxy/controller/controller.api.js
-proxy/controller/controller.inject.js
-proxy/controller/controller.sw.js
+proxy/launch-plugin.mjs*
+# Copied and compressed by build:proxy
+proxy/scramjet/
+proxy/controller/
 # Temp folder fetch-webblox.mjs unpacks the archived client into
 .webclient-archive-*/

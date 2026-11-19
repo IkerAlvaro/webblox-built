@@ -6,7 +6,7 @@
   "scripts": {
     "start": "bun server.ts",
     "fetch:webblox": "node scripts/fetch-webblox.mjs",
-    "build:proxy": "bun build integrations/scramjet/plugin.ts --target browser --format esm --outfile proxy/launch-plugin.mjs && bun run scripts/copy-scramjet-assets.mjs",
+    "build:proxy": "bun build integrations/scramjet/plugin.ts --target browser --format esm --outfile proxy/launch-plugin.mjs && bun run scripts/copy-scramjet-assets.mjs && bun run scripts/precompress.mjs",
     "test": "bun test",
     "typecheck": "tsc"
   },

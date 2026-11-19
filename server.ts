@@ -2,11 +2,18 @@
 // Wisp server at /wisp/ that only reaches Roblox. Run with Bun after
 // `bun run fetch:webblox`; to embed in your own server instead, mount
 // createBloxHandler (server/blox.ts) the same way.
-import { createServer } from "node:http";
-import { extname, resolve } from "node:path";
+import { createServer, type IncomingMessage } from "node:http";
+import { resolve } from "node:path";
 import { Readable } from "node:stream";
 import { logging, server as wisp } from "@mercuryworkshop/wisp-js/server";
 import { BLOX_PREFIX, createBloxHandler } from "./server/blox";
+import { serveStatic } from "./server/static";
+
+function requestHeaders(req: IncomingMessage): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) if (typeof value === "string") headers.set(name, value);
+  return headers;
+}
 
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = process.env.HOST || "127.0.0.1";
@@ -25,13 +32,6 @@ const ROOT_FILES: Record<string, string> = {
   "/licenses/AGPL-3.0-Scramjet.txt": "licenses/AGPL-3.0-Scramjet.txt",
 };
 
-const ROOT_MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".wasm": "application/wasm",
-  ".txt": "text/plain; charset=utf-8",
-};
 
 // The page's epoxy client opens TLS to Roblox through this; nothing else is
 // reachable, so the server is not an open proxy.
@@ -56,24 +56,17 @@ const server = createServer(async (req, res) => {
   } else if (url.pathname === BLOX_PREFIX.slice(0, -1)) {
     response = new Response(null, { status: 308, headers: { location: `${BLOX_PREFIX}${url.search}` } });
   } else if (url.pathname.startsWith(BLOX_PREFIX)) {
-    const headers = new Headers();
-    for (const [name, value] of Object.entries(req.headers)) if (typeof value === "string") headers.set(name, value);
+    const headers = requestHeaders(req);
     const abort = new AbortController();
     res.on("close", () => abort.abort());
     response = await handleBlox(new Request(url, { method: req.method, headers, signal: abort.signal }), url.pathname);
   } else if (rootFile !== undefined && (req.method === "GET" || req.method === "HEAD")) {
-    const path = resolve(import.meta.dir, rootFile);
-    const file = Bun.file(path);
-    response = (await file.exists())
-      ? new Response(req.method === "HEAD" ? null : file, {
-          headers: {
-            "content-type": ROOT_MIME[extname(path).toLowerCase()] ?? file.type ?? "application/octet-stream",
-            "cache-control": "no-cache",
-            "x-content-type-options": "nosniff",
-            "referrer-policy": "strict-origin-when-cross-origin",
-          },
-        })
-      : new Response("Not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+    const file = await serveStatic(new Request(url, { method: req.method, headers: requestHeaders(req) }), resolve(import.meta.dir, rootFile));
+    if (file) {
+      file.headers.set("x-content-type-options", "nosniff");
+      file.headers.set("referrer-policy", "strict-origin-when-cross-origin");
+    }
+    response = file ?? new Response("Not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
   } else {
     response = new Response("Not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
   }

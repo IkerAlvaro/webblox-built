@@ -6,21 +6,11 @@
 // shared WebAssembly.Memory, which needs SharedArrayBuffer.
 import { readFile } from "node:fs/promises";
 import { extname, normalize, resolve, sep } from "node:path";
+import { MIME_TYPES, serveStatic } from "./static";
 
 export const BLOX_PREFIX = "/blox/";
 
 const HOST_FILES: Record<string, true> = { "index.html": true, "host.js": true, "host.css": true, "sw.js": true };
-const MIME_TYPES: Record<string, string> = {
-  ".css": "text/css; charset=utf-8",
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".otf": "font/otf",
-  ".png": "image/png",
-  ".ttf": "font/ttf",
-  ".wasm": "application/wasm",
-};
 // Engine content paths as the metadata list writes them; anything else is
 // not something the engine asks for.
 const ENGINE_PATH = /^[A-Za-z0-9_@ .()+-]+(?:\/[A-Za-z0-9_@ .()+-]+)*$/;
@@ -54,51 +44,18 @@ function inside(root: string, relative: string): string | null {
   return path.startsWith(`${root}${sep}`) ? path : null;
 }
 
-// Codings the browser takes, leaving out any it refuses with q=0.
-function acceptedEncodings(header: string | null): Set<string> {
-  const accepted = new Set<string>();
-  for (const part of (header ?? "").split(",")) {
-    const [name = "", ...params] = part.trim().toLowerCase().split(";");
-    const q = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
-    if (name && !(q && Number(q.slice(2)) === 0)) accepted.add(name.trim());
-  }
-  return accepted;
-}
-
 export function createBloxHandler(paths: BloxPaths, fetchImpl: typeof fetch = fetch) {
   const host = resolve(paths.host);
   const engine = resolve(paths.engine);
   const epoxy = resolve(paths.epoxy);
 
-  // Revalidated on every load (no-cache + last-modified): the engine keeps the
-  // same paths across versions, so a cached WebClient.js must never outlive
-  // the WebClient.wasm it was built with.
+  // Revalidated on every load: the engine keeps the same paths across
+  // versions, so a cached WebClient.js must never outlive the WebClient.wasm
+  // it was built with.
   async function serveFile(req: Request, path: string): Promise<Response | null> {
-    const file = Bun.file(path);
-    if (!(await file.exists())) return null;
-    const ext = extname(path).toLowerCase();
-    const headers: Record<string, string> = {
-      "content-type": MIME_TYPES[ext] || file.type || "application/octet-stream",
-      "cache-control": "no-cache",
-      "last-modified": new Date(file.lastModified).toUTCString(),
-    };
-    const since = Date.parse(req.headers.get("if-modified-since") ?? "");
-    if (Number.isFinite(since) && Math.floor(file.lastModified / 1000) <= Math.floor(since / 1000)) {
-      return new Response(null, { status: 304, headers: isolated(headers) });
-    }
-    let body: Blob = file;
-    // fetch-webblox.mjs leaves brotli and gzip copies of the big engine files.
-    const accepted = acceptedEncodings(req.headers.get("accept-encoding"));
-    for (const [encoding, suffix] of [["br", ".br"], ["gzip", ".gz"]] as const) {
-      if (!accepted.has(encoding)) continue;
-      const compressed = Bun.file(`${path}${suffix}`);
-      if (!(await compressed.exists())) continue;
-      body = compressed;
-      headers["content-encoding"] = encoding;
-      headers.vary = "Accept-Encoding";
-      break;
-    }
-    return new Response(req.method === "HEAD" ? null : body, { headers: isolated(headers) });
+    const response = await serveStatic(req, path);
+    if (!response) return null;
+    return new Response(response.body, { status: response.status, headers: isolated(Object.fromEntries(response.headers)) });
   }
 
   // The metadata list is the engine's own prefetch list, not a promise that
