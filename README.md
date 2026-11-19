@@ -5,7 +5,11 @@ build) running on your own server, already built. Drop it into your site or
 run it as-is.
 
 Roblox's engine files are **not** in this repo. `bun run fetch:webblox` pulls
-them straight from Roblox's CDN.
+them straight from Roblox's CDN. If Roblox's client settings or CDN refuse the
+request or don't answer (common from datacenter IPs), it falls back to the
+latest complete build in the public
+[webclient archive](https://github.com/setup-rbxcdn/webclient-archive),
+checked against GitHub's published SHA-256.
 
 > Prefer having your agent build it from scratch? See
 > [x8rr/webblox](https://github.com/x8rr/webblox).

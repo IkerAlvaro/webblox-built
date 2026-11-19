@@ -10,3 +10,4 @@ proxy/scramjet
 work
 outputs
 *.log
+.webclient-archive-*

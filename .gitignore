@@ -7,3 +7,5 @@ proxy/scramjet/scramjet.wasm
 proxy/controller/controller.api.js
 proxy/controller/controller.inject.js
 proxy/controller/controller.sw.js
+# Temp folder fetch-webblox.mjs unpacks the archived client into
+.webclient-archive-*/

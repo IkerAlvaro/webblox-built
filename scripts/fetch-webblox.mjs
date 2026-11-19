@@ -175,18 +175,14 @@ async function pool(items, worker) {
   return failures;
 }
 
-async function main() {
-  const pinned = process.argv[2];
-  if (pinned !== undefined && !VERSION_RE.test(pinned)) {
-    console.error(`[webblox] "${pinned}" is not a version-<16 hex> upload id`);
-    process.exit(1);
-  }
+// Pulls the engine straight from Roblox's CDN. Throws on any failure, so main()
+// can fall back to the public archive.
+async function fetchFromCdn(pinned) {
   const live = pinned ? null : await getJson(CLIENT_VERSION_URL);
-  let upload = pinned ?? live.clientVersionUpload;
+  const upload = pinned ?? live?.clientVersionUpload;
   if (!VERSION_RE.test(upload ?? "")) throw new Error(`unexpected client-version response: ${JSON.stringify(live)}`);
-  let base = `${CDN}/${upload}-RobloxWebClient`;
-  let engineVersion = live?.version ?? null;
-  let applicationSettings;
+  const base = `${CDN}/${upload}-RobloxWebClient`;
+  const version = live?.version ?? null;
   console.log(`[webblox] engine ${upload}${live ? ` (${live.version})` : " (pinned)"}`);
   console.log(`[webblox] from ${base}`);
 
@@ -202,48 +198,75 @@ async function main() {
     await rm(OUT, { recursive: true, force: true });
   }
   await mkdir(OUT, { recursive: true });
-  let record = { clientVersionUpload: upload, version: engineVersion, source: base, complete: false };
+  const record = { clientVersionUpload: upload, version, source: base, complete: false };
   await writeFile(VERSION_FILE, `${JSON.stringify(record, null, 2)}\n`);
 
-  let usedArchive = false;
-  try {
-    for (const name of CORE) {
-      const fetched = await download(`${base}/${name}`, join(OUT, name));
-      console.log(`[webblox] ${fetched ? "fetched" : "kept"} ${name}`);
-    }
-
-    const metadata = JSON.parse(await readFile(join(OUT, "WebClient.metadata.json"), "utf8"));
-    if (!Array.isArray(metadata)) throw new Error("WebClient.metadata.json is not a file list");
-    const files = metadata.filter(entry => {
-      const ok = typeof entry?.path === "string" && entry.path.startsWith("/") && !entry.path.split("/").includes("..");
-      if (!ok) console.warn(`[webblox] skipping bad metadata entry ${JSON.stringify(entry)}`);
-      return ok;
-    });
-    const total = files.reduce((sum, entry) => sum + entry.size, 0);
-    console.log(`[webblox] ${files.length} content files, ${(total / 1e6).toFixed(1)} MB`);
-    const failures = await pool(files, entry =>
-      download(`${base}${encodeURI(entry.path)}`, join(OUT, entry.path), entry.size));
-    if (failures.length) {
-      for (const message of failures) console.error(`[webblox] failed ${message}`);
-      throw new Error(`${failures.length} Roblox client files could not be downloaded: ${failures.slice(0, 5).join("; ")}`);
-    }
-
-    const flags = await getJson(FLAGS_URL);
-    applicationSettings = flags.applicationSettings;
-    if (!applicationSettings || typeof applicationSettings !== "object") throw new Error("Roblox returned no application settings");
-  } catch (error) {
-    if (!/HTTP (403|404)/.test(error.message ?? "")) throw error;
-    console.warn(`[webblox] Roblox CDN denied a client file (${error.message}); using the latest complete public archive`);
-    const archived = await restoreArchivedClient(pinned ? upload : null, Boolean(pinned));
-    upload = archived.upload;
-    base = archived.base;
-    engineVersion = archived.version;
-    applicationSettings = archived.applicationSettings;
-    usedArchive = true;
-    record = { clientVersionUpload: upload, version: engineVersion, source: base, complete: false, archived: true };
-    await writeFile(VERSION_FILE, `${JSON.stringify(record, null, 2)}\n`);
-    console.log(`[webblox] restored complete archived client ${upload} (${engineVersion ?? "version unknown"})`);
+  for (const name of CORE) {
+    const fetched = await download(`${base}/${name}`, join(OUT, name));
+    console.log(`[webblox] ${fetched ? "fetched" : "kept"} ${name}`);
   }
+
+  const files = await readMetadata();
+  const total = files.reduce((sum, entry) => sum + (Number(entry.size) || 0), 0);
+  console.log(`[webblox] ${files.length} content files, ${(total / 1e6).toFixed(1)} MB`);
+  const failures = await pool(files, entry =>
+    download(`${base}${encodeURI(entry.path)}`, join(OUT, entry.path), entry.size));
+  if (failures.length) {
+    for (const message of failures) console.error(`[webblox] failed ${message}`);
+    throw new Error(`${failures.length} Roblox client files could not be downloaded: ${failures.slice(0, 5).join("; ")}`);
+  }
+
+  const { applicationSettings } = await getJson(FLAGS_URL);
+  if (!applicationSettings || typeof applicationSettings !== "object") throw new Error("Roblox returned no application settings");
+  return { record, applicationSettings, archived: false };
+}
+
+// The metadata list's paths are rooted at the engine base; refuse anything
+// that would escape OUT.
+async function readMetadata() {
+  const metadata = JSON.parse(await readFile(join(OUT, "WebClient.metadata.json"), "utf8"));
+  if (!Array.isArray(metadata)) throw new Error("WebClient.metadata.json is not a file list");
+  return metadata.filter(entry => {
+    const ok = typeof entry?.path === "string" && entry.path.startsWith("/") && !entry.path.split("/").includes("..");
+    if (!ok) console.warn(`[webblox] skipping bad metadata entry ${JSON.stringify(entry)}`);
+    return ok;
+  });
+}
+
+async function main() {
+  const pinned = process.argv[2];
+  if (pinned !== undefined && !VERSION_RE.test(pinned)) {
+    console.error(`[webblox] "${pinned}" is not a version-<16 hex> upload id`);
+    process.exit(1);
+  }
+
+  // Roblox blocks some networks (datacenter IPs among them) from its client
+  // settings or its CDN, whether with an HTTP error or by not answering at all.
+  // Any failure there falls back to the public archive of complete builds.
+  let result;
+  try {
+    result = await fetchFromCdn(pinned);
+  } catch (cdnError) {
+    console.warn(`[webblox] Roblox's CDN failed (${cdnError.message}); using the latest complete public archive`);
+    let archived;
+    try {
+      archived = await restoreArchivedClient(pinned ?? null, Boolean(pinned));
+    } catch (archiveError) {
+      throw new Error(`Roblox's CDN failed (${cdnError.message}) and so did the public archive (${archiveError.message})`);
+    }
+    const record = {
+      clientVersionUpload: archived.upload,
+      version: archived.version,
+      source: archived.base,
+      complete: false,
+      archived: true,
+    };
+    await writeFile(VERSION_FILE, `${JSON.stringify(record, null, 2)}\n`);
+    console.log(`[webblox] restored complete archived client ${archived.upload} (${archived.version ?? "version unknown"})`);
+    result = { record, applicationSettings: archived.applicationSettings, archived: true };
+  }
+  const { record, applicationSettings } = result;
+  const upload = record.clientVersionUpload;
 
   for (const name of GZIP) {
     const path = join(OUT, name);
@@ -253,15 +276,8 @@ async function main() {
     console.log(`[webblox] gzipped ${name} (${((await sizeOnDisk(`${path}.gz`)) / 1e6).toFixed(1)} MB)`);
   }
 
-  const metadata = JSON.parse(await readFile(join(OUT, "WebClient.metadata.json"), "utf8"));
-  if (!Array.isArray(metadata)) throw new Error("WebClient.metadata.json is not a file list");
-  const files = metadata.filter(entry => {
-    // Paths are rooted at the engine base; refuse anything that would escape OUT.
-    const ok = typeof entry?.path === "string" && entry.path.startsWith("/") && !entry.path.split("/").includes("..");
-    if (!ok) console.warn(`[webblox] skipping bad metadata entry ${JSON.stringify(entry)}`);
-    return ok;
-  });
-  if (usedArchive) {
+  const files = await readMetadata();
+  if (result.archived) {
     const missing = [];
     for (const entry of files) {
       const actual = await sizeOnDisk(join(OUT, entry.path));
