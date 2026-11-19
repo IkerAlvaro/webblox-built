@@ -448,9 +448,31 @@ async function searchGames(query) {
   }));
 }
 
+// The launcher's renderer switch: "webgl", "webgpu", or null for automatic
+// (WebGPU, or WebGL on Chrome before 156 on x86).
+const RENDERER_KEY = "blox.renderer";
+
+function savedRenderer() {
+  try {
+    const value = localStorage.getItem(RENDERER_KEY);
+    return value === "webgl" || value === "webgpu" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveRenderer(value) {
+  try {
+    if (value) localStorage.setItem(RENDERER_KEY, value);
+    else localStorage.removeItem(RENDERER_KEY);
+  } catch {}
+}
+
 function play(placeId) {
   const url = new URL(location.href);
   url.search = `?placeId=${placeId}`;
+  const renderer = savedRenderer();
+  if (renderer) url.searchParams.set("renderer", renderer);
   location.assign(url);
 }
 
@@ -483,9 +505,31 @@ function showLauncher() {
       <input type="search" placeholder="Busca juegos o pega un enlace de juego" aria-label="Busca juegos o pega un enlace de juego" autocomplete="off" spellcheck="false">
       <button type="submit">Buscar</button>
     </form>
+    <fieldset class="renderer-switch">
+      <legend>Gráficos</legend>
+      <label><input type="radio" name="renderer" value=""> Automático</label>
+      <label><input type="radio" name="renderer" value="webgpu"> WebGPU</label>
+      <label><input type="radio" name="renderer" value="webgl"> WebGL</label>
+    </fieldset>
+    <p class="renderer-hint"></p>
     <p class="launcher-status" role="status"></p>
     <ul class="launcher-games"></ul>`;
   const form = launcher.querySelector("form");
+  const hint = launcher.querySelector(".renderer-hint");
+  const hints = {
+    "": "Automático usa WebGPU, salvo en Chrome anterior a 156 en x86, donde usa WebGL para evitar cierres.",
+    webgpu: "WebGPU suele ir más fluido, pero en Chrome anterior a 156 en x86 el juego puede cerrarse a los pocos minutos.",
+    webgl: "WebGL es más compatible y estable; puede ir algo más lento.",
+  };
+  const current = savedRenderer() ?? "";
+  for (const radio of launcher.querySelectorAll('input[name="renderer"]')) {
+    radio.checked = radio.value === current;
+    radio.addEventListener("change", () => {
+      saveRenderer(radio.value || null);
+      hint.textContent = hints[radio.value];
+    });
+  }
+  hint.textContent = hints[current];
   const input = launcher.querySelector("input");
   const status = launcher.querySelector(".launcher-status");
   const list = launcher.querySelector(".launcher-games");
@@ -537,7 +581,7 @@ async function chromeCrashRisk() {
 // instead, unless the URL already names a renderer.
 async function avoidWebGpuOnOldChrome() {
   const url = new URL(location.href);
-  if (url.searchParams.has("renderer") || (await chromeCrashRisk()) === null) return;
+  if (url.searchParams.has("renderer") || savedRenderer() || (await chromeCrashRisk()) === null) return;
   url.searchParams.set("renderer", "webgl");
   history.replaceState(history.state, "", url);
   console.info("[blox] Chrome before 156 on x86: using WebGL instead of WebGPU");
