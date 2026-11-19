@@ -246,10 +246,14 @@ async function upstream({ url, method, headers, body }) {
   const epoxy = await transport;
   let timer;
   const response = await Promise.race([
-    epoxy.request(target, method, body && body.byteLength ? body : null, [...out], undefined),
+    // Epoxy's own errors are Rust debug dumps; keep them in the console only.
+    epoxy.request(target, method, body && body.byteLength ? body : null, [...out], undefined).catch((error) => {
+      console.error("[blox] epoxy:", target.href, error);
+      throw new Error(`No se pudo conectar con ${target.hostname} a través del servidor Wisp ${WISP}.`);
+    }),
     new Promise((_, reject) => {
       timer = setTimeout(
-        () => reject(new Error(`no answer from ${target.hostname} through the Wisp server ${WISP} in ${REQUEST_TIMEOUT_MS / 1000}s`)),
+        () => reject(new Error(`${target.hostname} no respondió a través del servidor Wisp ${WISP} en ${REQUEST_TIMEOUT_MS / 1000} s`)),
         REQUEST_TIMEOUT_MS,
       );
     }),
@@ -416,8 +420,8 @@ function placeFromInput(text) {
 async function robloxJson(url) {
   const result = await upstream({ url, method: "GET", headers: [["accept", "application/json"]], body: null });
   // Roblox limits requests per IP, and the IP it sees is the Wisp server's.
-  if (result.status === 429) throw new Error(`Roblox is rate-limiting the Wisp server (${WISP}). Try again in a minute, or open this page with ?wisp=<another server>.`);
-  if (result.status !== 200) throw new Error(`Roblox answered HTTP ${result.status}`);
+  if (result.status === 429) throw new Error(`Roblox está limitando las peticiones del servidor Wisp (${WISP}). Prueba de nuevo en un minuto o abre esta página con ?wisp=<otro servidor>.`);
+  if (result.status !== 200) throw new Error(`Roblox respondió HTTP ${result.status}`);
   return JSON.parse(new TextDecoder().decode(result.body));
 }
 
@@ -463,7 +467,7 @@ function gameItem(game) {
   name.textContent = game.name;
   const meta = document.createElement("span");
   meta.className = "meta";
-  meta.textContent = [game.creator, Number.isFinite(game.players) ? `${game.players.toLocaleString()} playing` : ""].filter(Boolean).join(" · ");
+  meta.textContent = [game.creator, Number.isFinite(game.players) ? `${game.players.toLocaleString("es")} jugando` : ""].filter(Boolean).join(" · ");
   button.append(icon, name, meta);
   button.addEventListener("click", () => play(game.placeId));
   item.append(button);
@@ -476,8 +480,8 @@ function showLauncher() {
   launcher.className = "launcher";
   launcher.innerHTML = `
     <form role="search">
-      <input type="search" placeholder="Search games or paste a game link" aria-label="Search games or paste a game link" autocomplete="off" spellcheck="false">
-      <button type="submit">Search</button>
+      <input type="search" placeholder="Busca juegos o pega un enlace de juego" aria-label="Busca juegos o pega un enlace de juego" autocomplete="off" spellcheck="false">
+      <button type="submit">Buscar</button>
     </form>
     <p class="launcher-status" role="status"></p>
     <ul class="launcher-games"></ul>`;
@@ -493,15 +497,15 @@ function showLauncher() {
     const query = input.value.trim();
     if (!query) return;
     const current = ++search;
-    status.textContent = "Searching…";
+    status.textContent = "Buscando…";
     list.replaceChildren();
     try {
       const games = await searchGames(query);
       if (current !== search) return;
-      status.textContent = games.length ? "" : "No games found.";
+      status.textContent = games.length ? "" : "No se encontraron juegos.";
       list.replaceChildren(...games.map(gameItem));
     } catch (error) {
-      if (current === search) status.textContent = `Search failed: ${error.message || error}`;
+      if (current === search) status.textContent = `La búsqueda falló: ${error.message || error}`;
     }
   });
   document.body.append(launcher);
@@ -511,7 +515,7 @@ function showLauncher() {
 // ---- Boot ---------------------------------------------------------------------
 
 async function controlled() {
-  if (!("serviceWorker" in navigator)) throw new Error("This browser has no service worker support.");
+  if (!("serviceWorker" in navigator)) throw new Error("Este navegador no admite service workers.");
   await navigator.serviceWorker.register(new URL("sw.js", ROOT), { scope: ROOT.pathname });
   await navigator.serviceWorker.ready;
   if (navigator.serviceWorker.controller) return;
@@ -520,7 +524,7 @@ async function controlled() {
     navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true });
     setTimeout(resolve, 3000);
   });
-  if (!navigator.serviceWorker.controller) throw new Error("The service worker did not take control of this page. Reload to try again.");
+  if (!navigator.serviceWorker.controller) throw new Error("El service worker no tomó el control de esta página. Recarga para intentarlo de nuevo.");
 }
 
 function loadScript(src) {
@@ -528,25 +532,25 @@ function loadScript(src) {
     const script = document.createElement("script");
     script.src = src;
     script.onload = resolve;
-    script.onerror = () => reject(new Error(`Failed to load ${src}`));
+    script.onerror = () => reject(new Error(`No se pudo cargar ${src}`));
     document.body.append(script);
   });
 }
 
 async function boot() {
   if (!window.crossOriginIsolated) {
-    throw new Error("This page is not cross-origin isolated, so the engine cannot use shared memory.");
+    throw new Error("Esta página no está aislada entre orígenes (cross-origin isolated), así que el motor no puede usar memoria compartida.");
   }
-  say("Connecting…");
+  say("Conectando…");
   await controlled();
   await transport;
   const placeId = new URLSearchParams(location.search).get("placeId");
   // The engine only joins experiences: without a place it logs "no startup
   // place id" and exits, so pick one here first.
   if (!placeId || !/^[1-9]\d{0,18}$/.test(placeId)) return showLauncher();
-  say("Checking your Roblox session…");
+  say("Comprobando tu sesión de Roblox…");
   await ensureSession();
-  say("Starting…");
+  say("Iniciando…");
   // What Roblox's WasmLoader.js leaves behind for WasmPlayer.js. channel null
   // keeps the engine on the production flags and channel.
   window.__wasmLoaderContext = { engineBase: ENGINE_BASE, channel: null, server: "prod" };

@@ -137,7 +137,7 @@
           });
           frame = controller.createFrame(iframe, { plugins: [launchPlugin] });
           frame.go("https://www.roblox.com/login");
-          setStatus("Roblox está listo. Inicia sesión con un código enviado por correo.");
+          setStatus("Abriendo Roblox… Inicia sesión con un código enviado por correo.");
         } catch (error) {
           console.error(error);
           setStatus(`No se pudo iniciar Roblox: ${error.message || error}`, true);
