@@ -1,7 +1,8 @@
 // Pull Roblox's official browser client (binary type "WebClientApp") from
 // setup.rbxcdn.com into vendor/webblox/engine/, plus a pinned copy of its live
 // FFlags. The engine is an Emscripten build: WasmPlayer.js boots WebClient.js +
-// WebClient.wasm and prefetches every file listed in WebClient.metadata.json
+// WebClient.wasm and loads every file listed in WebClient.fsindex.txt (0.748+)
+// or WebClient.metadata.json (older)
 // from the same base URL.
 //
 // Run: bun run fetch:webblox [version-xxxxxxxxxxxxxxxx]
@@ -33,7 +34,10 @@ const CDN = "https://setup.rbxcdn.com/webclient";
 const ARCHIVE_API = "https://api.github.com/repos/setup-rbxcdn/webclient-archive/releases?per_page=20";
 const execFileAsync = promisify(execFile);
 // Loaded by WasmPlayer.js by name; everything else comes from the metadata list.
-const CORE = ["WasmPlayer.js", "WebClient.js", "WebClient.wasm", "WebClient.metadata.json", "audio-processor-fast.js"];
+const CORE = ["WasmPlayer.js", "WebClient.js", "WebClient.wasm", "audio-processor-fast.js"];
+// The engine's list of content files. 0.748 replaced the JSON list with a
+// front-coded text index; older engines only have the JSON one.
+const FILE_LISTS = ["WebClient.fsindex.txt", "WebClient.metadata.json"];
 const CONCURRENCY = 16;
 const RETRIES = 3;
 const VERSION_RE = /^version-[0-9a-f]{16}$/;
@@ -52,7 +56,7 @@ async function getJson(url) {
 // tries these in turn until one passes the checks in restoreRelease().
 const ARCHIVE_ATTEMPTS = 5;
 // What the engine cannot start without; the rest is checked against the metadata list.
-const ARCHIVE_REQUIRED = ["WasmPlayer.js", "WebClient.js", "WebClient.wasm", "WebClient.metadata.json"];
+const ARCHIVE_REQUIRED = ["WasmPlayer.js", "WebClient.js", "WebClient.wasm"];
 
 async function getArchiveReleases(requestedUpload, exact) {
   const response = await fetch(ARCHIVE_API, {
@@ -122,9 +126,10 @@ async function restoreRelease(release) {
     }
     // The engine folder is wherever the archive keeps its file list: the
     // upload folder itself, or a subfolder in newer archive layouts.
-    const metadataName = names.find(name => name.endsWith("/WebClient.metadata.json"));
-    const engineDir = metadataName ? metadataName.slice(0, -"WebClient.metadata.json".length) : prefix;
+    const listName = names.find(name => FILE_LISTS.some(list => name.endsWith(`/${list}`)));
+    const engineDir = listName ? listName.slice(0, listName.lastIndexOf("/") + 1) : prefix;
     const missingCore = ARCHIVE_REQUIRED.filter(name => !names.includes(`${engineDir}${name}`));
+    if (!listName) missingCore.push(FILE_LISTS.join(" or "));
     if (missingCore.length) {
       const sample = names.filter(name => /metadata|WebClient\./i.test(name)).slice(0, 8).join(", ") || names.slice(0, 8).join(", ");
       throw new Error(`archive lacks ${missingCore.join(", ")} (has: ${sample})`);
@@ -250,6 +255,18 @@ async function fetchFromCdn(pinned) {
     const fetched = await download(`${base}/${name}`, join(OUT, name));
     console.log(`[webblox] ${fetched ? "fetched" : "kept"} ${name}`);
   }
+  const listErrors = [];
+  for (const name of FILE_LISTS) {
+    try {
+      await download(`${base}/${name}`, join(OUT, name));
+      console.log(`[webblox] file list ${name}`);
+      listErrors.length = 0;
+      break;
+    } catch (error) {
+      listErrors.push(error.message);
+    }
+  }
+  if (listErrors.length) throw new Error(`no engine file list: ${listErrors.join("; ")}`);
 
   const files = await readMetadata();
   const total = files.reduce((sum, entry) => sum + (Number(entry.size) || 0), 0);
@@ -269,13 +286,51 @@ async function fetchFromCdn(pinned) {
 // The metadata list's paths are rooted at the engine base; refuse anything
 // that would escape OUT.
 async function readMetadata(dir = OUT) {
-  const metadata = JSON.parse(await readFile(join(dir, "WebClient.metadata.json"), "utf8"));
-  if (!Array.isArray(metadata)) throw new Error("WebClient.metadata.json is not a file list");
-  return metadata.filter(entry => {
+  let entries;
+  if ((await sizeOnDisk(join(dir, "WebClient.fsindex.txt"))) >= 0) {
+    entries = parseFsIndex(await readFile(join(dir, "WebClient.fsindex.txt")));
+  } else {
+    entries = JSON.parse(await readFile(join(dir, "WebClient.metadata.json"), "utf8"));
+    if (!Array.isArray(entries)) throw new Error("WebClient.metadata.json is not a file list");
+  }
+  return entries.filter(entry => {
     const ok = typeof entry?.path === "string" && entry.path.startsWith("/") && !entry.path.split("/").includes("..");
-    if (!ok) console.warn(`[webblox] skipping bad metadata entry ${JSON.stringify(entry)}`);
+    if (!ok) console.warn(`[webblox] skipping bad file list entry ${JSON.stringify(entry)}`);
     return ok;
   });
+}
+
+// WebClient.fsindex.txt, as WasmPlayer.js (0.748) parses it: the line
+// "rbxfsindex 1", then per file "<shared>\t<suffix>\t<size>\n", where the
+// path is the first <shared> bytes of the previous path followed by <suffix>.
+export function parseFsIndex(bytes) {
+  const header = Buffer.from("rbxfsindex 1\n");
+  if (!Buffer.from(bytes.subarray(0, header.length)).equals(header)) throw new Error("WebClient.fsindex.txt: unsupported header");
+  const entries = [];
+  let previous = Buffer.alloc(0);
+  let at = header.length;
+  const until = (byte) => {
+    const end = bytes.indexOf(byte, at);
+    if (end < 0) throw new Error("WebClient.fsindex.txt: truncated line");
+    const field = bytes.subarray(at, end);
+    at = end + 1;
+    return field;
+  };
+  const number = (field) => {
+    const text = Buffer.from(field).toString("utf8");
+    if (!/^[0-9]+$/.test(text)) throw new Error("WebClient.fsindex.txt: malformed line");
+    return Number(text);
+  };
+  while (at < bytes.length) {
+    const shared = number(until(9));
+    const suffix = until(9);
+    const size = number(until(10));
+    if (shared > previous.length || suffix.includes(10)) throw new Error("WebClient.fsindex.txt: malformed line");
+    const path = Buffer.concat([previous.subarray(0, shared), suffix]);
+    entries.push({ path: path.toString("utf8"), size });
+    previous = path;
+  }
+  return entries;
 }
 
 async function main() {
