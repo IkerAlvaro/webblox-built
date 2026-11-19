@@ -44,7 +44,14 @@ async function getJson(url) {
   return res.json();
 }
 
-async function getArchiveRelease(requestedUpload, exact) {
+// Newest first. An archived build marked complete can still lack files the
+// engine needs (the 0.748 archive has no WebClient.metadata.json), so main()
+// tries these in turn until one passes the checks in restoreRelease().
+const ARCHIVE_ATTEMPTS = 5;
+// What the engine cannot start without; the rest is checked against the metadata list.
+const ARCHIVE_REQUIRED = ["WasmPlayer.js", "WebClient.js", "WebClient.wasm", "WebClient.metadata.json"];
+
+async function getArchiveReleases(requestedUpload, exact) {
   const response = await fetch(ARCHIVE_API, {
     headers: { accept: "application/vnd.github+json", "user-agent": "webblox-built" },
   });
@@ -57,44 +64,72 @@ async function getArchiveRelease(requestedUpload, exact) {
     release.assets?.some(asset => asset.name?.endsWith(".zip") && /^sha256:[0-9a-f]{64}$/.test(asset.digest ?? "")),
   );
   const requested = requestedUpload && complete.find(release => release.tag_name === `webclient-${requestedUpload}`);
-  if (exact && !requested) throw new Error(`Roblox client ${requestedUpload} is not in the public archive.`);
-  const release = requested ?? complete[0];
-  if (!release) throw new Error("No complete archived Roblox browser client is available.");
-  return release;
+  if (exact) {
+    if (!requested) throw new Error(`Roblox client ${requestedUpload} is not in the public archive.`);
+    return [requested];
+  }
+  const ordered = requested ? [requested, ...complete.filter(release => release !== requested)] : complete;
+  if (!ordered.length) throw new Error("No complete archived Roblox browser client is available.");
+  return ordered.slice(0, ARCHIVE_ATTEMPTS);
 }
 
 async function restoreArchivedClient(requestedUpload, exact) {
-  const release = await getArchiveRelease(requestedUpload, exact);
+  const releases = await getArchiveReleases(requestedUpload, exact);
+  const failures = [];
+  for (const release of releases) {
+    try {
+      return await restoreRelease(release);
+    } catch (error) {
+      console.warn(`[webblox] skipping archived ${release.tag_name}: ${error.message}`);
+      failures.push(`${release.tag_name}: ${error.message}`);
+    }
+  }
+  throw new Error(`no usable archived client (${failures.join("; ")})`);
+}
+
+// Downloads one archived build, checks it, and only then replaces OUT with it.
+async function restoreRelease(release) {
   const asset = release.assets.find(item => item.name?.endsWith(".zip"));
   const match = /^webclient-version-([0-9a-f]{16})$/.exec(release.tag_name);
-  if (!asset || !match) throw new Error("The archived Roblox browser client has an invalid release format.");
+  if (!asset || !match) throw new Error("invalid release format");
   const upload = `version-${match[1]}`;
   const assetUrl = new URL(asset.browser_download_url);
   if (assetUrl.origin !== "https://github.com" || !assetUrl.pathname.startsWith("/setup-rbxcdn/webclient-archive/releases/download/")) {
-    throw new Error("The archived Roblox client download is not from the expected GitHub release.");
+    throw new Error("download is not from the expected GitHub release");
   }
   const temp = await mkdtemp(join(ROOT, ".webclient-archive-"));
   const zipPath = join(temp, asset.name);
   try {
     const response = await fetch(assetUrl);
-    if (!response.ok || !response.body) throw new Error(`Roblox client archive download: HTTP ${response.status}`);
+    if (!response.ok || !response.body) throw new Error(`download: HTTP ${response.status}`);
     await pipeline(Readable.fromWeb(response.body), createWriteStream(zipPath));
 
     const hash = createHash("sha256");
     for await (const chunk of createReadStream(zipPath)) hash.update(chunk);
     const actualDigest = `sha256:${hash.digest("hex")}`;
     if (actualDigest !== asset.digest || (await sizeOnDisk(zipPath)) !== asset.size) {
-      throw new Error("The archived Roblox client failed GitHub's published SHA-256 or size check.");
+      throw new Error("failed GitHub's published SHA-256 or size check");
     }
 
     const { stdout } = await execFileAsync("unzip", ["-Z1", zipPath], { maxBuffer: 8 * 1024 * 1024 });
     const names = stdout.trim().split("\n").filter(Boolean);
     const prefix = `${upload}/`;
     if (!names.length || names.some(name => name.startsWith("/") || !name.startsWith(prefix) || name.split("/").includes(".."))) {
-      throw new Error("The Roblox client archive contains an unexpected path.");
+      throw new Error("archive contains an unexpected path");
     }
+    const missingCore = ARCHIVE_REQUIRED.filter(name => !names.includes(`${prefix}${name}`));
+    if (missingCore.length) throw new Error(`archive lacks ${missingCore.join(", ")}`);
     await execFileAsync("unzip", ["-q", zipPath, "-d", temp], { maxBuffer: 8 * 1024 * 1024 });
     const sourceDir = join(temp, upload);
+
+    const files = await readMetadata(sourceDir);
+    const missing = [];
+    for (const entry of files) {
+      const actual = await sizeOnDisk(join(sourceDir, entry.path));
+      if (actual !== entry.size) missing.push(`${entry.path} (${actual}/${entry.size})`);
+    }
+    if (missing.length) throw new Error(`${missing.length} content files missing or wrong size: ${missing.slice(0, 5).join(", ")}`);
+
     let applicationSettings;
     try {
       const archivedFlags = JSON.parse(await readFile(join(sourceDir, "client-settings", "application-WebClientApp.json"), "utf8"));
@@ -103,11 +138,11 @@ async function restoreArchivedClient(requestedUpload, exact) {
       if (error.code !== "ENOENT") throw error;
     }
     if (!applicationSettings || typeof applicationSettings !== "object") {
-      console.warn("[webblox] archive has no saved feature flags; fetching Roblox's current flags");
+      console.warn(`[webblox] ${release.tag_name} has no saved feature flags; fetching Roblox's current flags`);
       applicationSettings = (await getJson(FLAGS_URL)).applicationSettings;
     }
     if (!applicationSettings || typeof applicationSettings !== "object") {
-      throw new Error("No usable Roblox feature flags are available.");
+      throw new Error("no usable Roblox feature flags");
     }
     await rm(OUT, { recursive: true, force: true });
     await cp(sourceDir, OUT, { recursive: true });
@@ -223,8 +258,8 @@ async function fetchFromCdn(pinned) {
 
 // The metadata list's paths are rooted at the engine base; refuse anything
 // that would escape OUT.
-async function readMetadata() {
-  const metadata = JSON.parse(await readFile(join(OUT, "WebClient.metadata.json"), "utf8"));
+async function readMetadata(dir = OUT) {
+  const metadata = JSON.parse(await readFile(join(dir, "WebClient.metadata.json"), "utf8"));
   if (!Array.isArray(metadata)) throw new Error("WebClient.metadata.json is not a file list");
   return metadata.filter(entry => {
     const ok = typeof entry?.path === "string" && entry.path.startsWith("/") && !entry.path.split("/").includes("..");
