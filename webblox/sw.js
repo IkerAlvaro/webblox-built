@@ -27,7 +27,7 @@ self.addEventListener("fetch", (event) => {
 async function crossOrigin(request, clientId) {
   if (request.method === "GET" && FLAGS_URL.test(request.url)) {
     const pinned = await fetch(PINNED_FLAGS, { cache: "no-cache" }).catch(() => null);
-    if (pinned?.ok) return reply(200, "", [["content-type", "application/json"]], await pinned.arrayBuffer());
+    if (pinned?.ok) return reply(200, "", [["content-type", "application/json"]], withLocalFlags(await pinned.text()));
   }
   try {
     const body = request.method === "GET" || request.method === "HEAD" ? null : await request.arrayBuffer();
@@ -40,6 +40,18 @@ async function crossOrigin(request, clientId) {
     return reply(result.status, result.statusText, result.headers, result.body);
   } catch (error) {
     return reply(502, "Bad Gateway", [["content-type", "application/json"]], JSON.stringify({ error: String(error?.message || error) }));
+  }
+}
+
+// Lets the page pick the renderer with ?renderer=webgl|webgpu (WasmPlayer.js
+// only reads it with this flag on); host.js uses it to keep old Chrome off WebGPU.
+function withLocalFlags(text) {
+  try {
+    const flags = JSON.parse(text);
+    if (flags?.applicationSettings) flags.applicationSettings.FFlagWebClientRenderQueryParams = "True";
+    return JSON.stringify(flags);
+  } catch {
+    return text;
   }
 }
 

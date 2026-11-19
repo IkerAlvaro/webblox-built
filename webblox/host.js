@@ -532,6 +532,17 @@ async function chromeCrashRisk() {
   }
 }
 
+// On those Chrome versions the crash comes from WebGPU losing its device (the
+// engine logs "[WebGPU] Device LOST" and cannot recover), so draw with WebGL
+// instead, unless the URL already names a renderer.
+async function avoidWebGpuOnOldChrome() {
+  const url = new URL(location.href);
+  if (url.searchParams.has("renderer") || (await chromeCrashRisk()) === null) return;
+  url.searchParams.set("renderer", "webgl");
+  history.replaceState(history.state, "", url);
+  console.info("[blox] Chrome before 156 on x86: using WebGL instead of WebGPU");
+}
+
 async function warnOldChrome() {
   const major = await chromeCrashRisk();
   if (major === null) return;
@@ -539,7 +550,7 @@ async function warnOldChrome() {
   note.className = "browser-warning";
   note.setAttribute("role", "alert");
   const text = document.createElement("p");
-  text.textContent = `Tienes Chrome ${major}. En esta versión, Roblox puede cerrarse a los 5 minutos de juego. Actualiza a Chrome ${CHROME_FIXED} o posterior en chrome://settings/help y reinicia el navegador.`;
+  text.textContent = `Tienes Chrome ${major}. Para evitar que Roblox se cierre a los pocos minutos, se usa WebGL en lugar de WebGPU (puede ir algo más lento). Actualiza a Chrome ${CHROME_FIXED} o posterior en chrome://settings/help para usar WebGPU.`;
   const close = document.createElement("button");
   close.type = "button";
   close.textContent = "Entendido";
@@ -590,6 +601,7 @@ async function boot() {
   say("Iniciando…");
   // What Roblox's WasmLoader.js leaves behind for WasmPlayer.js. channel null
   // keeps the engine on the production flags and channel.
+  await avoidWebGpuOnOldChrome();
   window.__wasmLoaderContext = { engineBase: ENGINE_BASE, channel: null, server: "prod" };
   await loadScript(`${ENGINE_BASE}/WasmPlayer.js`);
 }
