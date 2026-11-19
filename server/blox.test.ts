@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gzipSync } from "node:zlib";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import { createBloxHandler } from "./blox";
 
 const root = mkdtempSync(join(tmpdir(), "blox-"));
@@ -18,6 +18,10 @@ const wasm = new Uint8Array(4096).fill(7);
 writeFileSync(join(engine, "WebClient.wasm"), wasm);
 writeFileSync(join(engine, "WebClient.wasm.gz"), gzipSync(wasm));
 writeFileSync(join(engine, "content", "a.png"), "png");
+const script = "console.log('engine');".repeat(50);
+writeFileSync(join(engine, "WebClient.js"), script);
+writeFileSync(join(engine, "WebClient.js.gz"), gzipSync(script));
+writeFileSync(join(engine, "WebClient.js.br"), brotliCompressSync(script));
 const source = "https://setup.rbxcdn.com/webclient/version-0123456789abcdef-RobloxWebClient";
 writeFileSync(join(engine, "version.json"), JSON.stringify({ source }));
 
@@ -53,6 +57,16 @@ describe("/blox/", () => {
     const plain = await get("/blox/engine/WebClient.wasm");
     expect(plain.headers.get("content-encoding")).toBeNull();
     expect(new Uint8Array(await plain.arrayBuffer())).toEqual(wasm);
+  });
+
+  test("prefers the brotli copy, then gzip, by what the browser accepts", async () => {
+    const br = await get("/blox/engine/WebClient.js", { "accept-encoding": "gzip, deflate, br, zstd" });
+    expect(br.headers.get("content-encoding")).toBe("br");
+    expect(br.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(br.headers.get("vary")).toBe("Accept-Encoding");
+    const gz = await get("/blox/engine/WebClient.js", { "accept-encoding": "gzip" });
+    expect(gz.headers.get("content-encoding")).toBe("gzip");
+    expect((await get("/blox/engine/WebClient.js", { "accept-encoding": "br;q=0, gzip" })).headers.get("content-encoding")).toBe("gzip");
   });
 
   test("never serves files outside the host page and engine", async () => {

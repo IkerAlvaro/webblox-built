@@ -512,6 +512,42 @@ function showLauncher() {
   input.focus();
 }
 
+// ---- Browser check ------------------------------------------------------------
+
+// Roblox documents that Chrome before 156 on x86 can crash the web client after
+// about five minutes of play; only a browser update fixes it.
+const CHROME_FIXED = 156;
+
+async function chromeCrashRisk() {
+  const data = navigator.userAgentData;
+  if (!data?.getHighEntropyValues) return null;
+  try {
+    const { architecture, fullVersionList } = await data.getHighEntropyValues(["architecture", "fullVersionList"]);
+    if (architecture !== "x86") return null;
+    const chrome = (fullVersionList ?? []).find((b) => b.brand === "Google Chrome" || b.brand === "Chromium");
+    const major = Number.parseInt(chrome?.version ?? "", 10);
+    return Number.isFinite(major) && major < CHROME_FIXED ? major : null;
+  } catch {
+    return null;
+  }
+}
+
+async function warnOldChrome() {
+  const major = await chromeCrashRisk();
+  if (major === null) return;
+  const note = document.createElement("aside");
+  note.className = "browser-warning";
+  note.setAttribute("role", "alert");
+  const text = document.createElement("p");
+  text.textContent = `Tienes Chrome ${major}. En esta versión, Roblox puede cerrarse a los 5 minutos de juego. Actualiza a Chrome ${CHROME_FIXED} o posterior en chrome://settings/help y reinicia el navegador.`;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "Entendido";
+  close.addEventListener("click", () => note.remove());
+  note.append(text, close);
+  document.body.append(note);
+}
+
 // ---- Boot ---------------------------------------------------------------------
 
 async function controlled() {
@@ -541,6 +577,7 @@ async function boot() {
   if (!window.crossOriginIsolated) {
     throw new Error("Esta página no está aislada entre orígenes (cross-origin isolated), así que el motor no puede usar memoria compartida.");
   }
+  void warnOldChrome();
   say("Conectando…");
   await controlled();
   await transport;

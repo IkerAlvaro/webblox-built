@@ -78,3 +78,13 @@ body:has(.launcher) { overflow: auto; }
 .launcher-games .name { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .launcher-games .meta { overflow: hidden; color: #999; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .launcher-games button:hover img, .launcher-games button:focus-visible img { outline: 2px solid #335fff; }
+
+/* Old Chrome on x86: Roblox's web client can crash after a few minutes. */
+.browser-warning {
+  position: fixed; left: 50%; bottom: 16px; z-index: 20; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 14px; width: min(94vw, 560px); padding: 12px 14px;
+  border: 1px solid #6b5a1f; border-radius: 10px; background: #2b2615; color: #f6e7b0; font-size: 14px; line-height: 1.4;
+}
+.browser-warning button {
+  flex: none; padding: 7px 12px; border: 0; border-radius: 8px; background: #f6e7b0; color: #2b2615; font: inherit; font-weight: 600; cursor: pointer;
+}

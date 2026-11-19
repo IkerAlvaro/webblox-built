@@ -8,7 +8,8 @@
 // Without an argument the current production version is resolved from
 // clientsettings.roblox.com. Files already on disk with the expected size are
 // skipped, so an interrupted run resumes. WebClient.wasm (about 100 MB) also
-// gets a gzip copy beside it, which the server sends to browsers that accept it.
+// and WebClient.js get brotli and gzip copies beside them, which the server
+// sends to browsers that accept them.
 
 import { createReadStream, createWriteStream } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -19,7 +20,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { createGzip } from "node:zlib";
+import { constants as zlib, createBrotliCompress, createGzip } from "node:zlib";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "vendor", "webblox", "engine");
@@ -36,7 +37,9 @@ const CORE = ["WasmPlayer.js", "WebClient.js", "WebClient.wasm", "WebClient.meta
 const CONCURRENCY = 16;
 const RETRIES = 3;
 const VERSION_RE = /^version-[0-9a-f]{16}$/;
-const GZIP = ["WebClient.wasm"];
+// Precompressed beside the original; the server sends the best one the
+// browser accepts (brotli is roughly a fifth smaller than gzip on the engine).
+const PRECOMPRESS = ["WebClient.wasm", "WebClient.js"];
 
 async function getJson(url) {
   const res = await fetch(url);
@@ -310,12 +313,26 @@ async function main() {
   const { record, applicationSettings } = result;
   const upload = record.clientVersionUpload;
 
-  for (const name of GZIP) {
+  for (const name of PRECOMPRESS) {
     const path = join(OUT, name);
-    if ((await sizeOnDisk(`${path}.gz`)) >= 0) continue;
-    await pipeline(createReadStream(path), createGzip({ level: 9 }), createWriteStream(`${path}.gz.part`));
-    await rename(`${path}.gz.part`, `${path}.gz`);
-    console.log(`[webblox] gzipped ${name} (${((await sizeOnDisk(`${path}.gz`)) / 1e6).toFixed(1)} MB)`);
+    if ((await sizeOnDisk(path)) < 0) continue;
+    const size = await sizeOnDisk(path);
+    const codecs = [
+      [".gz", () => createGzip({ level: 9 })],
+      // Quality 9 rather than 11: 11 takes minutes on the 100 MB engine for a
+      // few percent more, too slow for a deploy build.
+      [".br", () => createBrotliCompress({ params: {
+        [zlib.BROTLI_PARAM_QUALITY]: 9,
+        [zlib.BROTLI_PARAM_LGWIN]: 24,
+        [zlib.BROTLI_PARAM_SIZE_HINT]: size,
+      } })],
+    ];
+    for (const [suffix, codec] of codecs) {
+      if ((await sizeOnDisk(`${path}${suffix}`)) >= 0) continue;
+      await pipeline(createReadStream(path), codec(), createWriteStream(`${path}${suffix}.part`));
+      await rename(`${path}${suffix}.part`, `${path}${suffix}`);
+      console.log(`[webblox] ${name}${suffix} (${((await sizeOnDisk(`${path}${suffix}`)) / 1e6).toFixed(1)} MB)`);
+    }
   }
 
   const files = await readMetadata();

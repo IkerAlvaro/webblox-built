@@ -54,6 +54,17 @@ function inside(root: string, relative: string): string | null {
   return path.startsWith(`${root}${sep}`) ? path : null;
 }
 
+// Codings the browser takes, leaving out any it refuses with q=0.
+function acceptedEncodings(header: string | null): Set<string> {
+  const accepted = new Set<string>();
+  for (const part of (header ?? "").split(",")) {
+    const [name = "", ...params] = part.trim().toLowerCase().split(";");
+    const q = params.map((p) => p.trim()).find((p) => p.startsWith("q="));
+    if (name && !(q && Number(q.slice(2)) === 0)) accepted.add(name.trim());
+  }
+  return accepted;
+}
+
 export function createBloxHandler(paths: BloxPaths, fetchImpl: typeof fetch = fetch) {
   const host = resolve(paths.host);
   const engine = resolve(paths.engine);
@@ -76,12 +87,16 @@ export function createBloxHandler(paths: BloxPaths, fetchImpl: typeof fetch = fe
       return new Response(null, { status: 304, headers: isolated(headers) });
     }
     let body: Blob = file;
-    // fetch-webblox.mjs leaves a gzip copy of the 100 MB engine binary.
-    const gzip = Bun.file(`${path}.gz`);
-    if (/\bgzip\b/.test(req.headers.get("accept-encoding") ?? "") && (await gzip.exists())) {
-      body = gzip;
-      headers["content-encoding"] = "gzip";
+    // fetch-webblox.mjs leaves brotli and gzip copies of the big engine files.
+    const accepted = acceptedEncodings(req.headers.get("accept-encoding"));
+    for (const [encoding, suffix] of [["br", ".br"], ["gzip", ".gz"]] as const) {
+      if (!accepted.has(encoding)) continue;
+      const compressed = Bun.file(`${path}${suffix}`);
+      if (!(await compressed.exists())) continue;
+      body = compressed;
+      headers["content-encoding"] = encoding;
       headers.vary = "Accept-Encoding";
+      break;
     }
     return new Response(req.method === "HEAD" ? null : body, { headers: isolated(headers) });
   }
