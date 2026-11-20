@@ -506,6 +506,26 @@ async function searchGames(query) {
 // The launcher's renderer switch: "webgl", "webgpu", or null for automatic
 // (WebGPU, or WebGL on Chrome before 156 on x86).
 const RENDERER_KEY = "blox.renderer";
+// The launcher's quality switch: WasmPlayer.js draws at devicePixelRatio ×
+// ?renderScale=, so 0.75 draws 56% of the pixels and 0.5 a quarter, which
+// eases the GPU and its memory under WebGL and WebGPU alike.
+const SCALE_KEY = "blox.renderScale";
+const SCALES = ["1", "0.75", "0.5"];
+
+function savedScale() {
+  try {
+    const value = localStorage.getItem(SCALE_KEY);
+    return SCALES.includes(value) ? value : "1";
+  } catch {
+    return "1";
+  }
+}
+
+function saveScale(value) {
+  try {
+    localStorage.setItem(SCALE_KEY, value);
+  } catch {}
+}
 
 function savedRenderer() {
   try {
@@ -528,6 +548,8 @@ function play(placeId) {
   url.search = `?placeId=${placeId}`;
   const renderer = savedRenderer();
   if (renderer) url.searchParams.set("renderer", renderer);
+  const scale = savedScale();
+  if (scale !== "1") url.searchParams.set("renderScale", scale);
   location.assign(url);
 }
 
@@ -567,6 +589,13 @@ function showLauncher() {
       <label><input type="radio" name="renderer" value="webgl"> WebGL</label>
     </fieldset>
     <p class="renderer-hint"></p>
+    <fieldset class="renderer-switch quality-switch">
+      <legend>Calidad</legend>
+      <label><input type="radio" name="scale" value="1"> Alta</label>
+      <label><input type="radio" name="scale" value="0.75"> Media</label>
+      <label><input type="radio" name="scale" value="0.5"> Rendimiento</label>
+    </fieldset>
+    <p class="renderer-hint quality-hint"></p>
     <p class="launcher-status" role="status"></p>
     <ul class="launcher-games"></ul>`;
   const form = launcher.querySelector("form");
@@ -585,6 +614,21 @@ function showLauncher() {
     });
   }
   hint.textContent = hints[current];
+  const qualityHint = launcher.querySelector(".quality-hint");
+  const qualityHints = {
+    "1": "Resolución completa de tu pantalla.",
+    "0.75": "Dibuja algo más de la mitad de los píxeles: va más fluido y usa menos memoria de vídeo.",
+    "0.5": "Dibuja una cuarta parte de los píxeles: lo más fluido, con imagen algo borrosa.",
+  };
+  const scale = savedScale();
+  for (const radio of launcher.querySelectorAll('input[name="scale"]')) {
+    radio.checked = radio.value === scale;
+    radio.addEventListener("change", () => {
+      saveScale(radio.value);
+      qualityHint.textContent = qualityHints[radio.value];
+    });
+  }
+  qualityHint.textContent = qualityHints[scale];
   const input = launcher.querySelector("input");
   const status = launcher.querySelector(".launcher-status");
   const list = launcher.querySelector(".launcher-games");
