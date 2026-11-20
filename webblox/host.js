@@ -235,7 +235,24 @@ function joinNamedServer(target, body) {
   }
 }
 
-async function upstream({ url, method, headers, body }) {
+// gamejoin is first asked as the web client the engine is, so Roblox answers
+// with the game server address it hands that client (joinScript.gameFqdn).
+// Only when that answer has no address is it asked again as the desktop
+// client, whose UDMUX answer the address is derived from (qdmuxFqdn), and
+// this page keeps doing so after that.
+let desktopGameJoin = false;
+
+function joinScriptOf(data) {
+  try {
+    return JSON.parse(new TextDecoder().decode(data))?.joinScript ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function upstream(message, asDesktop = desktopGameJoin) {
+  let { url, method, headers, body } = message;
+  const original = body ? body.slice(0) : body;
   const target = new URL(url);
   const out = new Map();
   for (const [name, value] of headers) {
@@ -247,7 +264,7 @@ async function upstream({ url, method, headers, body }) {
   out.set("origin", roblox ? "https://www.roblox.com" : target.origin);
   out.set("referer", roblox ? "https://www.roblox.com/" : `${target.origin}/`);
   if (gameJoin) {
-    out.set("rbx-user-agent", "Roblox/Darwin");
+    if (asDesktop) out.set("rbx-user-agent", "Roblox/Darwin");
     body = joinNamedServer(target, body);
   } else if (roblox && out.has("rbx-user-agent")) {
     out.set("rbx-user-agent", nativeUserAgent(out.get("rbx-user-agent")));
@@ -286,7 +303,19 @@ async function upstream({ url, method, headers, body }) {
     }
   }
   if (jar) writeJar(jar);
-  if (gameJoin && response.status === 200) data = withGameFqdn(data);
+  if (gameJoin && response.status === 200) {
+    const joinScript = joinScriptOf(data);
+    if (joinScript?.gameFqdn) {
+      console.info(`[blox] game server from Roblox (${asDesktop ? "desktop" : "web"} join): ${joinScript.gameFqdn}`);
+    } else if (joinScript && !asDesktop) {
+      console.info("[blox] Roblox gave the web client no game server address; asking as the desktop client");
+      desktopGameJoin = true;
+      return upstream({ ...message, body: original }, true);
+    } else if (joinScript) {
+      data = withGameFqdn(data);
+      console.info(`[blox] game server derived from the UDMUX relay: ${joinScriptOf(data)?.gameFqdn ?? "(none)"}`);
+    }
+  }
   return { status: response.status, statusText: response.statusText, headers: kept, body: data };
 }
 
