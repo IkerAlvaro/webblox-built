@@ -769,6 +769,84 @@ function allowSmallerEngineMemory() {
 
 allowSmallerEngineMemory();
 
+// ---- Recovery -------------------------------------------------------------------
+
+// Where the engine has no way back, offer one instead of a frozen page or a
+// blocking alert(): the GPU dropped the WebGL context or the WebGPU device,
+// or the server now runs a newer engine than the one this page loaded.
+function showRecovery(message, actions) {
+  if (document.querySelector(".recovery")) return;
+  const panel = document.createElement("aside");
+  panel.className = "recovery";
+  panel.setAttribute("role", "alertdialog");
+  const text = document.createElement("p");
+  text.textContent = message;
+  const buttons = document.createElement("div");
+  buttons.className = "recovery-actions";
+  for (const [label, run] of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", run);
+    buttons.append(button);
+  }
+  panel.append(text, buttons);
+  document.body.append(panel);
+  buttons.querySelector("button")?.focus();
+}
+
+function rejoin(renderer) {
+  const url = new URL(location.href);
+  if (renderer) url.searchParams.set("renderer", renderer);
+  location.replace(url);
+}
+
+function watchGraphicsLoss() {
+  // WasmPlayer.js answers a lost WebGL context with a blocking alert().
+  const nativeAlert = window.alert.bind(window);
+  window.alert = (message) => {
+    if (/WebGL context lost/i.test(String(message))) {
+      showRecovery("Se ha perdido la conexión con la tarjeta gráfica (WebGL). Vuelve a entrar para seguir jugando.", [
+        ["Volver a entrar", () => rejoin()],
+      ]);
+      return;
+    }
+    nativeAlert(message);
+  };
+  // A lost WebGPU device only logs "[WebGPU] Device LOST"; the game freezes.
+  const Adapter = globalThis.GPUAdapter;
+  if (!Adapter?.prototype?.requestDevice) return;
+  const requestDevice = Adapter.prototype.requestDevice;
+  Adapter.prototype.requestDevice = async function (...args) {
+    const device = await requestDevice.apply(this, args);
+    device.lost?.then((info) => {
+      if (info?.reason === "destroyed") return;
+      console.error("[blox] WebGPU device lost:", info?.reason, info?.message);
+      showRecovery("Se ha perdido la conexión con la tarjeta gráfica (WebGPU). Puedes volver a entrar, o hacerlo con WebGL, que es más estable.", [
+        ["Volver a entrar con WebGL", () => rejoin("webgl")],
+        ["Volver a entrar", () => rejoin()],
+      ]);
+    });
+    return device;
+  };
+}
+
+function watchEngineUpdates() {
+  navigator.serviceWorker?.addEventListener("message", (event) => {
+    if (event.data?.type !== "blox-engine-outdated") return;
+    showRecovery("Webblox se ha actualizado mientras jugabas. Vuelve a entrar para cargar la versión nueva.", [["Volver a entrar", () => rejoin()]]);
+  });
+}
+
+// Lets the browser keep the engine cache (about 230 MB) instead of clearing
+// it when space runs low; it may still say no, which changes nothing.
+function keepEngineCache() {
+  navigator.storage?.persist?.().catch(() => {});
+}
+
+watchGraphicsLoss();
+watchEngineUpdates();
+
 // ---- Boot ---------------------------------------------------------------------
 
 async function controlled() {
@@ -809,6 +887,7 @@ async function boot() {
   if (!placeId || !/^[1-9]\d{0,18}$/.test(placeId)) return showLauncher();
   say("Comprobando tu sesión de Roblox…");
   await ensureSession();
+  keepEngineCache();
   say("Iniciando…");
   // What Roblox's WasmLoader.js leaves behind for WasmPlayer.js. channel null
   // keeps the engine on the production flags and channel.

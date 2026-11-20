@@ -101,3 +101,15 @@ body:has(.launcher) { overflow: auto; }
 .renderer-switch label:has(input:focus-visible) { outline: 2px solid #8aa6ff; outline-offset: 2px; }
 .renderer-hint { margin-top: 6px; color: #999; font-size: 13px; }
 .loading-error-hint { color: #c9c9c9; font-size: 14px; line-height: 1.45; }
+
+/* Recovery: the GPU dropped the game, or a newer engine was deployed. */
+.recovery {
+  position: fixed; inset: 0; z-index: 30; display: grid; place-content: center; justify-items: center; gap: 16px;
+  padding: 24px; background: rgba(10, 11, 13, 0.82); text-align: center;
+}
+.recovery p { max-width: 44ch; color: #e8e8e8; font-size: 16px; line-height: 1.45; }
+.recovery-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.recovery-actions button {
+  padding: 10px 18px; border: 0; border-radius: 8px; background: #335fff; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+}
+.recovery-actions button + button { background: #3a3c40; }

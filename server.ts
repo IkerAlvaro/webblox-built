@@ -2,7 +2,7 @@
 // Wisp server at /wisp/ that only reaches Roblox. Run with Bun after
 // `bun run fetch:webblox`; to embed in your own server instead, mount
 // createBloxHandler (server/blox.ts) the same way.
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { Readable } from "node:stream";
 import { logging, server as wisp } from "@mercuryworkshop/wisp-js/server";
@@ -47,10 +47,10 @@ const handleBlox = createBloxHandler({
   epoxy: Bun.resolveSync("@mercuryworkshop/epoxy-transport", import.meta.dir),
 });
 
-const server = createServer(async (req, res) => {
+async function route(req: IncomingMessage, res: ServerResponse): Promise<Response> {
+  let response: Response;
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const rootFile = ROOT_FILES[url.pathname];
-  let response: Response;
   if (url.pathname === "/healthz") {
     response = new Response("ok", { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
   } else if (url.pathname === BLOX_PREFIX.slice(0, -1)) {
@@ -70,14 +70,40 @@ const server = createServer(async (req, res) => {
   } else {
     response = new Response("Not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
   }
+  return response;
+}
+
+const server = createServer(async (req, res) => {
+  let response: Response;
+  try {
+    response = await route(req, res);
+  } catch (error) {
+    // One bad request must never take the server down or hang the browser.
+    console.error("[webblox] request failed:", req.method, req.url, error);
+    response = new Response("Internal error", { status: 500, headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+  }
+  if (res.destroyed) return;
   res.writeHead(response.status, Object.fromEntries(response.headers));
-  if (response.body) Readable.fromWeb(response.body as never).pipe(res);
-  else res.end();
+  if (!response.body) {
+    res.end();
+    return;
+  }
+  const body = Readable.fromWeb(response.body as never);
+  // A file that fails mid-read, or a browser that hangs up, ends this response only.
+  body.on("error", (error) => {
+    console.error("[webblox] response stream failed:", req.url, error);
+    res.destroy();
+  });
+  res.on("close", () => body.destroy());
+  body.pipe(res);
 });
 
 server.on("upgrade", (req, socket, head) => {
   if (req.url?.startsWith("/wisp/")) wisp.routeRequest(req, socket, head);
   else socket.destroy();
 });
+
+process.on("unhandledRejection", (error) => console.error("[webblox] unhandled rejection:", error));
+process.on("uncaughtException", (error) => console.error("[webblox] uncaught exception:", error));
 
 server.listen(PORT, HOST, () => console.log(`[webblox] http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}/blox/`));

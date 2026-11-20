@@ -59,6 +59,19 @@ async function pruneOtherVersions(keep) {
   }
 }
 
+let outdatedAnnounced = false;
+async function announceIfOutdated(upload) {
+  if (outdatedAnnounced) return;
+  try {
+    const live = await fetch(new URL("engine/version.json", SCOPE), { cache: "no-store" });
+    if (!live.ok || (await live.json()).clientVersionUpload === upload) return;
+  } catch {
+    return;
+  }
+  outdatedAnnounced = true;
+  for (const page of await self.clients.matchAll({ type: "window" })) page.postMessage({ type: "blox-engine-outdated" });
+}
+
 async function cachedEngineFile(request, upload) {
   const name = `${CACHE_PREFIX}${upload}`;
   let cache = null;
@@ -75,6 +88,9 @@ async function cachedEngineFile(request, upload) {
     console.warn("[blox] engine cache unavailable:", error);
   }
   const response = await fetch(request.url, { credentials: "same-origin", cache: "no-cache" });
+  // The server refuses a version it no longer runs: tell the page, whose
+  // engine would otherwise fail on the next file it asks for.
+  if (response.status === 404) void announceIfOutdated(upload);
   if (cache && (await intact(response))) {
     // Stored in the background: the engine gets its bytes now.
     cache.put(request.url, response.clone()).catch((error) => console.warn("[blox] could not cache", request.url, error));
