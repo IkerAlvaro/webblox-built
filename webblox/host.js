@@ -687,6 +687,44 @@ function explainJoinErrors() {
   if (codeElement) observer.observe(codeElement, { childList: true, characterData: true, subtree: true });
 }
 
+// ---- Engine memory -------------------------------------------------------------
+
+// WasmPlayer.js reserves the engine's shared memory in one block of
+// FIntWasmMemoryPages (32767 pages, 2 GB) and gives up when the browser
+// cannot find that much ("WebAssembly.Memory(): could not allocate memory":
+// little free RAM, many tabs, or a 32-bit browser). WebClient.wasm only needs
+// 4096 pages (256 MB), so ask again for less before failing.
+const ENGINE_MIN_PAGES = 4096;
+const MEMORY_FALLBACK_PAGES = [24576, 16384, 12288];
+
+function allowSmallerEngineMemory() {
+  const Native = WebAssembly.Memory;
+  if (Native.__bloxFallback) return;
+  function Memory(descriptor) {
+    try {
+      return new Native(descriptor);
+    } catch (error) {
+      const fixed = descriptor?.shared && descriptor.initial === descriptor.maximum;
+      if (!(error instanceof RangeError) || !fixed) throw error;
+      for (const pages of MEMORY_FALLBACK_PAGES) {
+        if (pages >= descriptor.initial || pages < ENGINE_MIN_PAGES) continue;
+        try {
+          const memory = new Native({ ...descriptor, initial: pages, maximum: pages });
+          console.warn(`[blox] ${descriptor.initial} pages of engine memory unavailable; running with ${pages} (${pages / 16} MB)`);
+          return memory;
+        } catch {}
+      }
+      say("No hay memoria libre suficiente para Roblox (necesita al menos 768 MB). Cierra otras pestañas o programas y recarga la página.");
+      throw error;
+    }
+  }
+  Memory.prototype = Native.prototype;
+  Memory.__bloxFallback = true;
+  WebAssembly.Memory = Memory;
+}
+
+allowSmallerEngineMemory();
+
 // ---- Boot ---------------------------------------------------------------------
 
 async function controlled() {
