@@ -23,6 +23,9 @@ import {
   type Fetcher,
 } from "./launch";
 
+// Crash reports and telemetry roblox.com sends: answered in the page so they
+// cost no Wisp traffic (the server refuses Sentry anyway, so each was an error).
+const TELEMETRY = /^(?:client-telemetry|ecsv2|tracing|ephemeralcounters\.api)\.roblox\.com$|(?:^|\.)ingest(?:\.[a-z]+)?\.sentry\.io$/i;
 const SELF_TARGETS = ["_self", "_parent", "_top", "_unfencedtop"];
 // Shown in the frame in place of /games/start while the game opens beside it.
 const LAUNCHING_PAGE =
@@ -196,6 +199,11 @@ export function createBloxLaunchPlugin(ManagedPlugin: ManagedPluginClass, option
   // Accounts on Roblox's web client are sent to /games/start instead of a protocol uri.
   function interceptNavigation(context: FetchContext, result: FetchResult): void {
     const { parsed } = context;
+    if (TELEMETRY.test(parsed.url.hostname)) {
+      const Headers = context.request.initialHeaders.constructor;
+      result.response = { body: "", headers: Headers.fromRawHeaders([["cache-control", "no-store"]]), status: 204, statusText: "No Content" };
+      return;
+    }
     if (parsed.isIframe) return;
     if (parsed.destination !== "document" && parsed.destination !== "iframe") return;
     const launch = parseGamesStart(parsed.url.href);

@@ -98,3 +98,18 @@ it("answers a navigation to /games/start in the tab with a launching page", () =
   expect(result.response?.body).toContain("new window");
   expect(opened).toEqual([{ placeId: "9" }]);
 });
+
+it("answers roblox.com's crash reports and telemetry itself, so they never reach the Wisp server", () => {
+  const Headers = { fromRawHeaders: (raw: [string, string][]) => raw };
+  const intercept = (url: string, destination = "empty") => {
+    const result: { response?: { body: string; status: number } } = {};
+    taps.get("fetch.intercept")!({ parsed: { isIframe: false, destination, url: new URL(url) }, request: { initialHeaders: { constructor: Headers } } }, result);
+    return result.response;
+  };
+  expect(intercept("https://o293668.ingest.us.sentry.io/api/5/envelope/")?.status).toBe(204);
+  expect(intercept("https://client-telemetry.roblox.com/v1/events")?.status).toBe(204);
+  expect(intercept("https://ecsv2.roblox.com/www/e.png")?.status).toBe(204);
+  expect(intercept("https://www.roblox.com/home")).toBeUndefined();
+  expect(intercept("https://apis.roblox.com/search")).toBeUndefined();
+  expect(opened).toEqual([]);
+});

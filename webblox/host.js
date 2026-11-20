@@ -90,17 +90,33 @@ const transport = (async () => {
 // ---- Cookie jar ---------------------------------------------------------------
 // { name, value, domain, hostOnly, path, expires (ms, 0 = session) }
 
+// Every relayed request reads the jar, thousands per game: keep it in memory
+// and reparse localStorage only when another tab of ours changed it.
+let jarCache = null;
+addEventListener("storage", (event) => {
+  if (event.key === JAR_KEY || event.key === null) jarCache = null;
+});
+
 function readJar() {
-  try {
-    const jar = JSON.parse(localStorage.getItem(JAR_KEY) || "[]");
-    return Array.isArray(jar) ? jar.filter((c) => !c.expires || c.expires > Date.now()) : [];
-  } catch {
-    return [];
+  if (jarCache === null) {
+    try {
+      const jar = JSON.parse(localStorage.getItem(JAR_KEY) || "[]");
+      jarCache = Array.isArray(jar) ? jar : [];
+    } catch {
+      jarCache = [];
+    }
   }
+  const now = Date.now();
+  return jarCache.filter((c) => !c.expires || c.expires > now);
 }
 
 function writeJar(jar) {
-  localStorage.setItem(JAR_KEY, JSON.stringify(jar));
+  jarCache = jar;
+  try {
+    localStorage.setItem(JAR_KEY, JSON.stringify(jar));
+  } catch (error) {
+    console.warn("[blox] could not save cookies:", error);
+  }
 }
 
 function domainMatches(host, cookie) {
@@ -596,6 +612,12 @@ function showLauncher() {
       <label><input type="radio" name="scale" value="0.5"> Rendimiento</label>
     </fieldset>
     <p class="renderer-hint quality-hint"></p>
+    <section class="downloader" aria-labelledby="downloader-title">
+      <h2 id="downloader-title">Motor de Roblox</h2>
+      <p class="downloader-text">Comprobando…</p>
+      <progress class="downloader-bar" max="1" value="0" hidden></progress>
+      <button type="button" class="downloader-button" hidden>Descargar</button>
+    </section>
     <p class="cache-line" hidden><span class="cache-text"></span> <button type="button" class="cache-clear">Vaciar</button></p>
     <p class="launcher-status" role="status"></p>
     <ul class="launcher-games"></ul>`;
@@ -631,6 +653,7 @@ function showLauncher() {
   }
   qualityHint.textContent = qualityHints[scale];
   void showCacheLine(launcher);
+  void setUpDownloader(launcher);
   const input = launcher.querySelector("input");
   const status = launcher.querySelector(".launcher-status");
   const list = launcher.querySelector(".launcher-games");
@@ -899,6 +922,146 @@ async function showCacheLine(launcher) {
     clear.disabled = true;
     await askWorker({ type: "blox-cache-clear" });
     text.textContent = "Juegos guardados: 0 MB. Se volverán a guardar mientras juegas.";
+  });
+}
+
+// ---- Engine downloader ------------------------------------------------------
+// Fetches every engine file (the core and all of WebClient.fsindex.txt) ahead
+// of time through sw.js, which keeps them, so the first game starts without
+// waiting on downloads. Files already kept are answered from the cache.
+
+const ENGINE_CORE = ["WasmPlayer.js", "WebClient.js", "WebClient.wasm", "WebClient.fsindex.txt", "audio-processor-fast.js"];
+const DOWNLOAD_CONCURRENCY = 6;
+
+function parseFsIndex(bytes) {
+  const header = new TextEncoder().encode("rbxfsindex 1\n");
+  if (!header.every((byte, i) => bytes[i] === byte)) throw new Error("WebClient.fsindex.txt: unsupported header");
+  const decoder = new TextDecoder();
+  const entries = [];
+  let previous = new Uint8Array(0);
+  let at = header.length;
+  const until = (byte) => {
+    const end = bytes.indexOf(byte, at);
+    if (end < 0) throw new Error("WebClient.fsindex.txt: truncated line");
+    const field = bytes.subarray(at, end);
+    at = end + 1;
+    return field;
+  };
+  while (at < bytes.length) {
+    const shared = Number(decoder.decode(until(9)));
+    const suffix = until(9);
+    const size = Number(decoder.decode(until(10)));
+    const path = new Uint8Array(shared + suffix.length);
+    path.set(previous.subarray(0, shared));
+    path.set(suffix, shared);
+    entries.push({ path: decoder.decode(path), size });
+    previous = path;
+  }
+  return entries;
+}
+
+async function engineFiles() {
+  const base = await engineBase();
+  if (base === ENGINE_ROOT) throw new Error("No se pudo saber qué versión del motor tiene el servidor.");
+  const index = await fetch(`${base}/WebClient.fsindex.txt`);
+  if (!index.ok) throw new Error(`El servidor respondió HTTP ${index.status} al pedir la lista de archivos.`);
+  const content = parseFsIndex(new Uint8Array(await index.arrayBuffer()));
+  const upload = base.slice(base.lastIndexOf("/") + 1);
+  const files = [
+    ...ENGINE_CORE.map((name) => ({ url: `${base}/${name}`, size: 0 })),
+    ...content.map((entry) => ({ url: `${base}${encodeURI(entry.path)}`, size: entry.size })),
+  ];
+  return { upload, files, bytes: content.reduce((sum, entry) => sum + entry.size, 0) };
+}
+
+async function keptEngineFiles(upload) {
+  try {
+    if (!(await caches.has(`blox-engine-${upload}`))) return new Set();
+    const cache = await caches.open(`blox-engine-${upload}`);
+    return new Set((await cache.keys()).map((request) => request.url));
+  } catch {
+    return new Set();
+  }
+}
+
+async function downloadEngine(files, onProgress, signal) {
+  let next = 0;
+  let done = 0;
+  const failed = [];
+  const worker = async () => {
+    while (next < files.length && !signal.aborted) {
+      const file = files[next++];
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const response = await fetch(file.url, { signal });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          await response.arrayBuffer();
+          break;
+        } catch (error) {
+          if (signal.aborted) return;
+          if (attempt === 3) failed.push(file.url);
+          else await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        }
+      }
+      onProgress(++done, files.length);
+    }
+  };
+  await Promise.all(Array.from({ length: DOWNLOAD_CONCURRENCY }, worker));
+  return failed;
+}
+
+async function setUpDownloader(launcher) {
+  const text = launcher.querySelector(".downloader-text");
+  const bar = launcher.querySelector(".downloader-bar");
+  const button = launcher.querySelector(".downloader-button");
+  if (!navigator.serviceWorker?.controller || !("caches" in window)) {
+    text.textContent = "Recarga la página para poder descargar el motor por adelantado.";
+    return;
+  }
+  let plan;
+  try {
+    plan = await engineFiles();
+  } catch (error) {
+    text.textContent = `No se pudo preparar la descarga: ${error.message || error}`;
+    return;
+  }
+  const megabytes = (bytes) => `${Math.round(bytes / 1048576)} MB`;
+  const kept = await keptEngineFiles(plan.upload);
+  const missing = plan.files.filter((file) => !kept.has(new URL(file.url, location.href).href));
+  if (!missing.length) {
+    text.textContent = `Descargado (${plan.upload}). Los juegos arrancan sin esperar a descargar el motor.`;
+    return;
+  }
+  text.textContent = `Descárgalo ahora (${missing.length} de ${plan.files.length} archivos, unos ${megabytes(plan.bytes + 105e6)}) para que el primer juego arranque sin esperar.`;
+  button.hidden = false;
+  let controller = null;
+  button.addEventListener("click", async () => {
+    if (controller) {
+      controller.abort();
+      return;
+    }
+    controller = new AbortController();
+    button.textContent = "Cancelar";
+    bar.hidden = false;
+    bar.value = 0;
+    const failed = await downloadEngine(missing, (done, total) => {
+      bar.value = done / total;
+      text.textContent = `Descargando… ${done} de ${total} archivos (${Math.round((done / total) * 100)} %)`;
+    }, controller.signal);
+    const cancelled = controller.signal.aborted;
+    controller = null;
+    bar.hidden = true;
+    if (cancelled) {
+      text.textContent = "Descarga cancelada. Lo ya descargado se conserva; pulsa Descargar para seguir.";
+      button.textContent = "Descargar";
+    } else if (failed.length) {
+      text.textContent = `Faltan ${failed.length} archivos que no se pudieron descargar. Pulsa Descargar para reintentarlos.`;
+      button.textContent = "Descargar";
+      missing.splice(0, missing.length, ...missing.filter((file) => failed.includes(file.url)));
+    } else {
+      text.textContent = `Descargado (${plan.upload}). Los juegos arrancan sin esperar a descargar el motor.`;
+      button.hidden = true;
+    }
   });
 }
 

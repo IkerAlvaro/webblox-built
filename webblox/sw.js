@@ -98,7 +98,13 @@ async function cachedEngineFile(request, upload) {
   return response;
 }
 
+// Telemetry and crash reports the engine and roblox.com send. Answered here
+// so they cost neither the relay nor the Wisp server, which refuses Sentry
+// anyway (every report was a failed request).
+const TELEMETRY = /^(?:client-telemetry|ecsv2|tracing|ephemeralcounters\.api)\.roblox\.com$|(?:^|\.)ingest(?:\.[a-z]+)?\.sentry\.io$/i;
+
 async function crossOrigin(request, clientId) {
+  if (TELEMETRY.test(new URL(request.url).hostname)) return reply(204, "No Content", [], null);
   if (request.method === "GET" && FLAGS_URL.test(request.url)) {
     const pinned = await fetch(PINNED_FLAGS, { cache: "no-cache" }).catch(() => null);
     if (pinned?.ok) return reply(200, "", [["content-type", "application/json"]], withLocalFlags(await pinned.text()));
