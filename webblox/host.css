@@ -9,12 +9,12 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #18191c; c
 #canvas.tab-lock-contended { filter: blur(4px); }
 
 #loading-overlay {
-  position: fixed; inset: 0; display: grid; place-items: center;
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; display: grid; place-items: center;
   background: #18191c; transition: opacity 0.6s ease;
 }
 #loading-overlay.loading-exiting { opacity: 0; pointer-events: none; }
 #loading-background-image {
-  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; object-fit: cover;
   opacity: 0; filter: blur(24px) brightness(0.4); transform: scale(1.1);
 }
 #loading-background-image[src] { opacity: 1; }
@@ -44,7 +44,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #18191c; c
 #loading-overlay.loading-failed #loading-cancel { display: none; }
 
 .session {
-  position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: rgba(0, 0, 0, 0.6);
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 10; display: grid; place-items: center; background: rgba(0, 0, 0, 0.6);
 }
 .session form { display: grid; gap: 12px; width: min(92vw, 420px); padding: 22px; border-radius: 12px; background: #232527; }
 .session h1 { font-size: 19px; }
@@ -59,8 +59,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #18191c; c
 .session button:disabled { opacity: 0.6; cursor: default; }
 
 /* No place to join yet: search Roblox or paste a game link. */
-#loading-overlay[hidden], body:has(.launcher) #canvas { display: none; }
-body:has(.launcher) { overflow: auto; }
+#loading-overlay[hidden], body.launcher-open #canvas { display: none; }
+body.launcher-open { overflow: auto; }
 .launcher { width: min(94vw, 760px); margin: 0 auto; padding: 32px 0; }
 .launcher form { display: flex; gap: 8px; }
 .launcher input {
@@ -97,14 +97,14 @@ body:has(.launcher) { overflow: auto; }
   background: #232527; cursor: pointer; user-select: none;
 }
 .renderer-switch input { position: absolute; opacity: 0; pointer-events: none; }
-.renderer-switch label:has(input:checked) { border-color: #335fff; background: #335fff; color: #fff; }
+.renderer-switch label.is-checked { border-color: #335fff; background: #335fff; color: #fff; }
 .renderer-switch label:has(input:focus-visible) { outline: 2px solid #8aa6ff; outline-offset: 2px; }
 .renderer-hint { margin-top: 6px; color: #999; font-size: 13px; }
 .loading-error-hint { color: #c9c9c9; font-size: 14px; line-height: 1.45; }
 
 /* Recovery: the GPU dropped the game, or a newer engine was deployed. */
 .recovery {
-  position: fixed; inset: 0; z-index: 30; display: grid; place-content: center; justify-items: center; gap: 16px;
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 30; display: grid; place-content: center; justify-items: center; gap: 16px;
   padding: 24px; background: rgba(10, 11, 13, 0.82); text-align: center;
 }
 .recovery p { max-width: 44ch; color: #e8e8e8; font-size: 16px; line-height: 1.45; }
@@ -129,3 +129,9 @@ body:has(.launcher) { overflow: auto; }
 .downloader-button {
   justify-self: start; padding: 8px 16px; border: 0; border-radius: 8px; background: #335fff; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
 }
+
+/* Browser too old for the engine (index.html's check). */
+#loading-overlay.unsupported .loading-card { max-width: min(92vw, 520px); }
+#loading-overlay.unsupported #status { color: #ffd479; line-height: 1.5; }
+#loading-overlay.unsupported #loading-cancel { display: none; }
+.compat-note { margin-bottom: 14px; padding: 10px 12px; border: 1px solid #6b5a1f; border-radius: 8px; background: #2b2615; color: #f6e7b0; font-size: 14px; line-height: 1.45; }

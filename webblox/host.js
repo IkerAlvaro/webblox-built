@@ -591,6 +591,7 @@ function gameItem(game) {
 
 function showLauncher() {
   document.getElementById("loading-overlay").hidden = true;
+  document.body.classList.add("launcher-open");
   const launcher = document.createElement("main");
   launcher.className = "launcher";
   launcher.innerHTML = `
@@ -653,6 +654,19 @@ function showLauncher() {
   }
   qualityHint.textContent = qualityHints[scale];
   void showCacheLine(launcher);
+  if (!COMPAT.ok) {
+    const note = document.createElement("p");
+    note.className = "compat-note";
+    note.setAttribute("role", "alert");
+    note.textContent = COMPAT.message;
+    launcher.prepend(note);
+  }
+  // label:has(input:checked) needs Chrome 105; mark the chosen option by class too.
+  const markChecked = () => {
+    for (const input of launcher.querySelectorAll(".renderer-switch input")) input.parentElement.classList.toggle("is-checked", input.checked);
+  };
+  launcher.addEventListener("change", markChecked);
+  markChecked();
   void setUpDownloader(launcher);
   const input = launcher.querySelector("input");
   const status = launcher.querySelector(".launcher-status");
@@ -1090,19 +1104,28 @@ function loadScript(src) {
   });
 }
 
+// What the inline check in index.html found (an older copy of the page has none).
+const COMPAT = window.__bloxCompat ?? { ok: true, problems: [], message: "" };
+
+function showUnsupported() {
+  const overlay = document.getElementById("loading-overlay");
+  overlay.classList.add("unsupported");
+  say(COMPAT.message);
+}
+
 async function boot() {
-  if (!window.crossOriginIsolated) {
-    throw new Error("Esta página no está aislada entre orígenes (cross-origin isolated), así que el motor no puede usar memoria compartida.");
-  }
+  const placeId = new URLSearchParams(location.search).get("placeId");
+  const joining = Boolean(placeId && /^[1-9]\d{0,18}$/.test(placeId));
+  // The launcher (search) only needs the service worker; the engine needs everything.
+  if (!COMPAT.ok && (joining || !("serviceWorker" in navigator))) return showUnsupported();
   explainJoinErrors();
   void warnOldChrome();
   say("Conectando…");
   await controlled();
   await transport;
-  const placeId = new URLSearchParams(location.search).get("placeId");
   // The engine only joins experiences: without a place it logs "no startup
   // place id" and exits, so pick one here first.
-  if (!placeId || !/^[1-9]\d{0,18}$/.test(placeId)) return showLauncher();
+  if (!joining) return showLauncher();
   say("Comprobando tu sesión de Roblox…");
   await ensureSession();
   keepEngineCache();

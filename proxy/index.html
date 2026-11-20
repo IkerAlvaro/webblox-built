@@ -25,7 +25,7 @@
         color: var(--ink);
       }
       * { box-sizing: border-box; }
-      body { margin: 0; height: 100dvh; display: grid; grid-template-rows: auto auto 1fr auto; }
+      body { margin: 0; height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto auto 1fr auto; }
       a { color: inherit; }
       :focus-visible { outline: 2px solid var(--cobalt-hi); outline-offset: 2px; }
 
@@ -78,6 +78,8 @@
       .parked button:hover { background: var(--cobalt-hi); }
       iframe[hidden] { display: none; }
       iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+      .compat { position: fixed; left: 50%; bottom: 40px; z-index: 5; transform: translateX(-50%); width: min(94vw, 620px); margin: 0; padding: 12px 14px; border: 1px solid #6b5a1f; border-radius: 10px; background: #2b2615; color: #f6e7b0; font-size: 14px; line-height: 1.45; }
+      .compat[hidden] { display: none; }
       footer { padding: 6px 16px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); }
 
       @media (max-width: 760px) {
@@ -121,6 +123,24 @@
       <a href="/licenses/AGPL-3.0-Scramjet.txt">AGPL-3.0</a>). Plantilla de <a href="https://github.com/x8rr/scramjet-templates">x8rr</a>.
     </footer>
 
+    <p class="compat" id="compat" role="alert" hidden></p>
+    <!-- Any Chrome understands this: says plainly when the browser is too old to
+         play, before the scripts below (which need a recent one) can fail. -->
+    <script>
+      (function () {
+        var match = /Chrom(?:e|ium)\/(\d+)/.exec(navigator.userAgent);
+        var chrome = match ? Number(match[1]) : 0;
+        var wasm = typeof WebAssembly === "object";
+        var jspi = wasm && typeof WebAssembly.Suspending === "function" && typeof WebAssembly.promising === "function";
+        var message = "";
+        if (!("serviceWorker" in navigator) || !wasm) message = "Este navegador es demasiado antiguo para Webblox. Usa Chrome o Edge 137 o posterior.";
+        else if (!jspi) message = (chrome ? "Tienes Chrome " + chrome + ". " : "") + "Puedes iniciar sesión, pero para jugar necesitas Chrome 137 o posterior (actualízalo en chrome://settings/help)" + (chrome >= 123 && chrome < 137 ? ", o activar \"Experimental WebAssembly JavaScript Promise Integration (JSPI)\" en chrome://flags" : "") + ".";
+        if (!message) return;
+        var note = document.getElementById("compat");
+        note.textContent = message;
+        note.hidden = false;
+      })();
+    </script>
     <script src="/scramjet/scramjet.js"></script>
     <script src="/controller/controller.api.js"></script>
     <script src="/epoxy/index.js"></script>
