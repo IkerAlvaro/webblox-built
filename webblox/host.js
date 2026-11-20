@@ -242,13 +242,21 @@ function joinNamedServer(target, body) {
 // this page keeps doing so after that.
 let desktopGameJoin = false;
 
-function joinScriptOf(data) {
+function joinAnswerOf(data) {
   try {
-    return JSON.parse(new TextDecoder().decode(data))?.joinScript ?? null;
+    return JSON.parse(new TextDecoder().decode(data)) ?? null;
   } catch {
     return null;
   }
 }
+
+function joinScriptOf(data) {
+  return joinAnswerOf(data)?.joinScript ?? null;
+}
+
+// gamejoin's status 12: "Not authorized to join this experience", what it
+// answers a web client the account or experience is not enabled for.
+const JOIN_NOT_AUTHORIZED = 12;
 
 async function upstream(message, asDesktop = desktopGameJoin) {
   let { url, method, headers, body } = message;
@@ -304,7 +312,13 @@ async function upstream(message, asDesktop = desktopGameJoin) {
   }
   if (jar) writeJar(jar);
   if (gameJoin && response.status === 200) {
-    const joinScript = joinScriptOf(data);
+    const answer = joinAnswerOf(data);
+    const joinScript = answer?.joinScript ?? null;
+    if (!asDesktop && !joinScript && answer?.status === JOIN_NOT_AUTHORIZED) {
+      console.info("[blox] Roblox refused the web client for this join; asking as the desktop client");
+      desktopGameJoin = true;
+      return upstream({ ...message, body: original }, true);
+    }
     if (joinScript?.gameFqdn) {
       console.info(`[blox] game server from Roblox (${asDesktop ? "desktop" : "web"} join): ${joinScript.gameFqdn}`);
     } else if (joinScript && !asDesktop) {
