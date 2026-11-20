@@ -629,11 +629,19 @@ function explainJoinErrors() {
   note.textContent =
     "Si estás en una red con restricciones (colegio, trabajo o una wifi pública), probablemente bloquea la conexión con los servidores de juego de Roblox. Prueba desde otra red, por ejemplo la de casa o los datos del móvil.";
   const update = () => {
-    const failed = /failed to launch|launch the game|could not connect|unable to connect/i.test(message.textContent ?? "");
+    // "Failed to connect to the Game." (error 279) is what a blocked
+    // WebTransport/QUIC handshake to the game server ends in.
+    const code = document.getElementById("loading-error-code")?.textContent ?? "";
+    const failed =
+      /failed to (?:launch|connect)|launch the game|could not connect|unable to connect/i.test(message.textContent ?? "") ||
+      /\b279\b/.test(code);
     if (failed && !note.isConnected) message.after(note);
     else if (!failed && note.isConnected) note.remove();
   };
-  new MutationObserver(update).observe(message, { childList: true, characterData: true, subtree: true });
+  const observer = new MutationObserver(update);
+  observer.observe(message, { childList: true, characterData: true, subtree: true });
+  const codeElement = document.getElementById("loading-error-code");
+  if (codeElement) observer.observe(codeElement, { childList: true, characterData: true, subtree: true });
 }
 
 // ---- Boot ---------------------------------------------------------------------
