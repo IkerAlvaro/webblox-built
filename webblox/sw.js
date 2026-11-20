@@ -103,6 +103,11 @@ async function crossOrigin(request, clientId) {
     const pinned = await fetch(PINNED_FLAGS, { cache: "no-cache" }).catch(() => null);
     if (pinned?.ok) return reply(200, "", [["content-type", "application/json"]], withLocalFlags(await pinned.text()));
   }
+  const cacheable = request.method === "GET" && !request.headers.has("range") && GAME_ASSET_HOST.test(new URL(request.url).hostname);
+  if (cacheable) {
+    const hit = await cachedGameAsset(request.url);
+    if (hit) return hit;
+  }
   try {
     const body = request.method === "GET" || request.method === "HEAD" ? null : await request.arrayBuffer();
     const result = await relay(clientId, {
@@ -111,7 +116,11 @@ async function crossOrigin(request, clientId) {
       headers: [...request.headers],
       body,
     });
-    return reply(result.status, result.statusText, result.headers, result.body);
+    const response = reply(result.status, result.statusText, result.headers, result.body);
+    if (cacheable && result.status === 200 && immutableAsset(request.url, response.headers)) {
+      void storeGameAsset(request.url, response.clone(), clientId);
+    }
+    return response;
   } catch (error) {
     return reply(502, "Bad Gateway", [["content-type", "application/json"]], JSON.stringify({ error: String(error?.message || error) }));
   }
@@ -172,3 +181,187 @@ async function relay(clientId, message) {
     page.postMessage({ type: "blox-fetch", ...message }, transfer);
   });
 }
+
+// ---- Game asset cache -----------------------------------------------------------
+// What games download from Roblox's CDN (meshes, textures, sounds) is kept
+// in Cache Storage when Roblox itself marks it as unchanging, so a game you
+// come back to loads from disk instead of over the network. Each asset
+// remembers which places used it; past the budget, the least recently used
+// assets go first, and those of your three most visited places go last.
+
+const GAME_ASSET_HOST = /(^|\.)rbxcdn\.com$/i;
+const ASSET_CACHE = "blox-game-assets";
+const ASSET_BUDGET = 768 * 1024 * 1024;
+const PROTECTED_PLACES = 3;
+const DAY = 86400;
+
+function immutableAsset(url, headers) {
+  const control = (headers.get("cache-control") || "").toLowerCase();
+  if (/no-store|private|no-cache/.test(control)) return false;
+  const maxAge = Number(/max-age=(\d+)/.exec(control)?.[1] ?? 0);
+  // Content-addressed paths (a 32-hex hash) never change either.
+  return maxAge >= DAY || /\/[0-9a-f]{32}(?:\/|$)/i.test(new URL(url).pathname);
+}
+
+// A small IndexedDB: assets { url, size, lastUsed, places[] }, visits { placeId, count, last }.
+let dbPromise = null;
+function db() {
+  dbPromise ??= new Promise((resolve, reject) => {
+    const open = indexedDB.open("blox-cache", 1);
+    open.onupgradeneeded = () => {
+      open.result.createObjectStore("assets", { keyPath: "url" });
+      open.result.createObjectStore("visits", { keyPath: "placeId" });
+    };
+    open.onsuccess = () => resolve(open.result);
+    open.onerror = () => reject(open.error);
+  }).catch((error) => {
+    dbPromise = null;
+    throw error;
+  });
+  return dbPromise;
+}
+
+function idb(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function store(name, mode = "readonly") {
+  return (await db()).transaction(name, mode).objectStore(name);
+}
+
+// Last-use times are written in batches: a game asks for thousands of assets.
+const touched = new Map();
+let flushTimer = 0;
+function touch(url) {
+  touched.set(url, Date.now());
+  flushTimer ||= setTimeout(async () => {
+    flushTimer = 0;
+    const batch = [...touched];
+    touched.clear();
+    try {
+      const assets = await store("assets", "readwrite");
+      for (const [key, time] of batch) {
+        const entry = await idb(assets.get(key));
+        if (entry) assets.put({ ...entry, lastUsed: time });
+      }
+    } catch {}
+  }, 5000);
+}
+
+async function cachedGameAsset(url) {
+  try {
+    const [cache, entry] = await Promise.all([caches.open(ASSET_CACHE), store("assets").then((s) => idb(s.get(url)))]);
+    if (!entry) return null;
+    const hit = await cache.match(url);
+    if (hit && (await hit.clone().blob()).size === entry.size) {
+      touch(url);
+      return hit;
+    }
+    // Damaged or missing: forget it, so it is downloaded and stored again.
+    await cache.delete(url);
+    (await store("assets", "readwrite")).delete(url);
+  } catch {}
+  return null;
+}
+
+async function placeOf(clientId) {
+  try {
+    const page = await relayPage(clientId);
+    const id = new URL(page.url).searchParams.get("placeId");
+    return id && /^[1-9]\d{0,18}$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+let pendingBytes = 0;
+async function storeGameAsset(url, response, clientId) {
+  try {
+    const size = (await response.clone().blob()).size;
+    if (!size || size > ASSET_BUDGET / 8) return;
+    const place = await placeOf(clientId);
+    await (await caches.open(ASSET_CACHE)).put(url, response);
+    const assets = await store("assets", "readwrite");
+    const previous = await idb(assets.get(url));
+    const places = [...new Set([...(previous?.places ?? []), ...(place ? [place] : [])])].slice(-8);
+    assets.put({ url, size, lastUsed: Date.now(), places });
+    pendingBytes += size;
+    if (pendingBytes > 32 * 1024 * 1024) {
+      pendingBytes = 0;
+      void trimGameAssets();
+    }
+  } catch (error) {
+    console.warn("[blox] could not cache", url, error);
+  }
+}
+
+async function topPlaces() {
+  const visits = await idb((await store("visits")).getAll());
+  return new Set(visits.sort((a, b) => b.count - a.count || b.last - a.last).slice(0, PROTECTED_PLACES).map((v) => v.placeId));
+}
+
+let trimming = null;
+function trimGameAssets() {
+  trimming ??= (async () => {
+    try {
+      const all = await idb((await store("assets")).getAll());
+      let total = all.reduce((sum, a) => sum + a.size, 0);
+      if (total <= ASSET_BUDGET) return;
+      const favourite = await topPlaces();
+      const kept = (a) => a.places.some((p) => favourite.has(p));
+      // Everything else first, oldest first; favourites' assets only if still over.
+      const order = all.sort((a, b) => Number(kept(a)) - Number(kept(b)) || a.lastUsed - b.lastUsed);
+      const evict = [];
+      for (const asset of order) {
+        if (total <= ASSET_BUDGET * 0.9) break;
+        evict.push(asset.url);
+        total -= asset.size;
+      }
+      // One transaction with no other awaits inside it, or it closes early.
+      const assets = await store("assets", "readwrite");
+      for (const url of evict) assets.delete(url);
+      const cache = await caches.open(ASSET_CACHE);
+      await Promise.all(evict.map((url) => cache.delete(url)));
+    } catch (error) {
+      console.warn("[blox] could not trim the game cache", error);
+    } finally {
+      trimming = null;
+    }
+  })();
+  return trimming;
+}
+
+async function recordVisit(placeId) {
+  if (!/^[1-9]\d{0,18}$/.test(String(placeId))) return;
+  const visits = await store("visits", "readwrite");
+  const entry = await idb(visits.get(String(placeId)));
+  visits.put({ placeId: String(placeId), count: (entry?.count ?? 0) + 1, last: Date.now() });
+}
+
+async function cacheStats() {
+  const all = await idb((await store("assets")).getAll());
+  const visits = await idb((await store("visits")).getAll());
+  return {
+    bytes: all.reduce((sum, a) => sum + a.size, 0),
+    assets: all.length,
+    budget: ASSET_BUDGET,
+    top: visits.sort((a, b) => b.count - a.count || b.last - a.last).slice(0, PROTECTED_PLACES),
+  };
+}
+
+async function clearGameAssets() {
+  await caches.delete(ASSET_CACHE);
+  (await store("assets", "readwrite")).clear();
+}
+
+self.addEventListener("message", (event) => {
+  const message = event.data;
+  const answer = (value) => event.ports[0]?.postMessage(value);
+  if (message?.type === "blox-visit") event.waitUntil(recordVisit(message.placeId).catch(() => {}));
+  else if (message?.type === "blox-cache-stats") event.waitUntil(cacheStats().then(answer, () => answer(null)));
+  else if (message?.type === "blox-cache-trim") event.waitUntil(trimGameAssets().then(() => answer(true)));
+  else if (message?.type === "blox-cache-clear") event.waitUntil(clearGameAssets().then(() => answer(true), () => answer(false)));
+});

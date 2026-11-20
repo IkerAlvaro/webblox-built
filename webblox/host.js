@@ -596,6 +596,7 @@ function showLauncher() {
       <label><input type="radio" name="scale" value="0.5"> Rendimiento</label>
     </fieldset>
     <p class="renderer-hint quality-hint"></p>
+    <p class="cache-line" hidden><span class="cache-text"></span> <button type="button" class="cache-clear">Vaciar</button></p>
     <p class="launcher-status" role="status"></p>
     <ul class="launcher-games"></ul>`;
   const form = launcher.querySelector("form");
@@ -629,6 +630,7 @@ function showLauncher() {
     });
   }
   qualityHint.textContent = qualityHints[scale];
+  void showCacheLine(launcher);
   const input = launcher.querySelector("input");
   const status = launcher.querySelector(".launcher-status");
   const list = launcher.querySelector(".launcher-games");
@@ -847,6 +849,59 @@ function keepEngineCache() {
 watchGraphicsLoss();
 watchEngineUpdates();
 
+// ---- Game cache -----------------------------------------------------------------
+// sw.js keeps what games download from Roblox's CDN, and needs to know which
+// places you visit most so their assets are the last to be cleared.
+
+function askWorker(message) {
+  const worker = navigator.serviceWorker?.controller;
+  if (!worker) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(null), 5000);
+    channel.port1.onmessage = ({ data }) => {
+      clearTimeout(timer);
+      resolve(data);
+    };
+    worker.postMessage(message, [channel.port2]);
+  });
+}
+
+function recordVisit(placeId) {
+  navigator.serviceWorker?.controller?.postMessage({ type: "blox-visit", placeId });
+}
+
+async function placeNames(ids) {
+  if (!ids.length) return new Map();
+  try {
+    const details = await robloxJson(`https://games.roblox.com/v1/games/multiget-place-details?placeIds=${ids.join(",")}`);
+    return new Map((Array.isArray(details) ? details : []).map((d) => [String(d.placeId), d.name]));
+  } catch {
+    return new Map();
+  }
+}
+
+async function showCacheLine(launcher) {
+  const line = launcher.querySelector(".cache-line");
+  const text = launcher.querySelector(".cache-text");
+  const clear = launcher.querySelector(".cache-clear");
+  const stats = await askWorker({ type: "blox-cache-stats" });
+  if (!stats) return;
+  const megabytes = (bytes) => `${Math.round(bytes / 1048576)} MB`;
+  text.textContent = `Juegos guardados: ${megabytes(stats.bytes)} de ${megabytes(stats.budget)}.`;
+  line.hidden = false;
+  const ids = stats.top.map((v) => v.placeId);
+  const names = await placeNames(ids);
+  if (ids.length) {
+    text.textContent += ` Se conservan antes los de tus juegos más visitados: ${ids.map((id) => names.get(id) ?? id).join(", ")}.`;
+  }
+  clear.addEventListener("click", async () => {
+    clear.disabled = true;
+    await askWorker({ type: "blox-cache-clear" });
+    text.textContent = "Juegos guardados: 0 MB. Se volverán a guardar mientras juegas.";
+  });
+}
+
 // ---- Boot ---------------------------------------------------------------------
 
 async function controlled() {
@@ -888,6 +943,7 @@ async function boot() {
   say("Comprobando tu sesión de Roblox…");
   await ensureSession();
   keepEngineCache();
+  recordVisit(placeId);
   say("Iniciando…");
   // What Roblox's WasmLoader.js leaves behind for WasmPlayer.js. channel null
   // keeps the engine on the production flags and channel.
