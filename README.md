@@ -1,3 +1,14 @@
+<!-- Hugging Face Spaces reads the block below; GitHub shows it as a small table. -->
+---
+title: Webblox
+emoji: 🎮
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 10000
+pinned: false
+---
+
 # webblox-built
 
 Roblox's official browser client (binary type `WebClientApp`, an Emscripten
@@ -52,6 +63,29 @@ the Roblox engine and builds the Scramjet launch integration.
 The free service may sleep after 15 minutes without inbound traffic and can
 restart at any time. Render also applies monthly instance-hour and bandwidth
 limits; the service is intended for personal use and testing on the free plan.
+
+## Deploy on Hugging Face Spaces
+
+A free Space needs no credit card and only sleeps after about 48 hours with no
+visitors, so with players it stays up. The front matter at the top of this
+README (`sdk: docker`, `app_port: 10000`) is all a Space needs to build this
+`Dockerfile`; the build downloads the Roblox engine the same way.
+
+1. Create a free account at <https://huggingface.co/join>.
+2. New Space → pick **Docker** → **Blank** → Public. Note its git URL,
+   `https://huggingface.co/spaces/<user>/<space>`.
+3. Push this repository to the Space (an access token with *write* scope from
+   <https://huggingface.co/settings/tokens> is the password):
+   ```sh
+   git remote add space https://huggingface.co/spaces/<user>/<space>
+   git push space HEAD:main
+   ```
+4. The Space builds and serves at `https://<user>-<space>.hf.space`. The first
+   build takes a few minutes while it fetches the engine.
+
+Hugging Face is meant for ML demos, so a Roblox proxy may fall outside its terms
+and be taken down; that is your call. Point an `is.gd` short link at the new URL
+so links you have shared keep working.
 
 Scramjet is licensed under AGPL-3.0. The vendored browser files and license are
 in `proxy/` and `licenses/AGPL-3.0-Scramjet.txt`. Scramjet attribution and its
